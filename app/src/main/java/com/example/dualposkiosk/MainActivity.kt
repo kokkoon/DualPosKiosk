@@ -51,6 +51,7 @@ import android.bluetooth.BluetoothSocket
 import android.os.UserManager
 import android.content.IntentFilter
 import android.content.ComponentName
+import android.os.Build
 import kotlin.concurrent.thread
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -348,14 +349,41 @@ class MainActivity : AppCompatActivity() {
         columnContainer.addView(rightColumn)
         rootLayout.addView(columnContainer)
 
-        // --- 4. BOTTOM: TEST PRINT ---
+        // --- 4. BOTTOM: TEST PRINT & UPDATE CHECK ---
+        val actionsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 10)
+            weightSum = 2f
+        }
+
         val testPrintBtn = Button(this).apply {
-            text = "Test Print (Android Side)"
+            text = "Test Print"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 printHtml("<html><body><h1>Test Print Success</h1><p>The Android Print system is working correctly!</p></body></html>")
             }
         }
-        rootLayout.addView(testPrintBtn)
+
+        val currentVer = AppUpdateManager.getCurrentVersion(this)
+        val updateBtn = Button(this).apply {
+            text = "Update (v$currentVer)"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                isEnabled = false
+                text = "Checking..."
+                AppUpdateManager.checkForUpdate(this@MainActivity, isManual = true) { status ->
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, status, Toast.LENGTH_LONG).show()
+                        isEnabled = true
+                        text = "Update (v$currentVer)"
+                    }
+                }
+            }
+        }
+
+        actionsLayout.addView(testPrintBtn)
+        actionsLayout.addView(updateBtn)
+        rootLayout.addView(actionsLayout)
 
         scrollContainer.addView(rootLayout)
         builder.setView(scrollContainer)
@@ -366,7 +394,7 @@ class MainActivity : AppCompatActivity() {
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(40, 0, 40, 20)
-            weightSum = 4f
+            weightSum = 5f
         }
 
         val setupBtn = Button(this).apply {
@@ -378,6 +406,22 @@ class MainActivity : AppCompatActivity() {
                 if (tenant.isNotEmpty()) {
                     val setupUrl = "https://$tenant.dalemao.com/page/business/business"
                     mainWebView.loadUrl(setupUrl)
+                    dialog.dismiss()
+                } else {
+                    Toast.makeText(this@MainActivity, "Please enter Tenant ID first", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        val qrBtn = Button(this).apply {
+            text = "QR Order"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                hideKeyboard(rootLayout)
+                val tenant = tenantInput.text.toString().trim().replace(" ", "")
+                if (tenant.isNotEmpty()) {
+                    val qrUrl = "https://$tenant.dalemao.com/page/public/generate-scan-to-order-qr"
+                    mainWebView.loadUrl(qrUrl)
                     dialog.dismiss()
                 } else {
                     Toast.makeText(this@MainActivity, "Please enter Tenant ID first", Toast.LENGTH_SHORT).show()
@@ -445,6 +489,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         buttonRow.addView(setupBtn)
+        buttonRow.addView(qrBtn)
         buttonRow.addView(androidSettingsBtn)
         buttonRow.addView(cancelBtn)
         buttonRow.addView(saveBtn)
@@ -486,6 +531,11 @@ class MainActivity : AppCompatActivity() {
 
             // Disable Volume Adjustments
             dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_ADJUST_VOLUME)
+
+            // Allow silent package installs/updates without user prompts
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            }
             
             // Start pinning
             startLockTask()

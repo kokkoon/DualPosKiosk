@@ -21,17 +21,13 @@ class WebAppInterface(private val context: Context) {
 
         Handler(Looper.getMainLooper()).post {
             val mainActivity = context as? MainActivity
-            if (isSilentMode && !printerPath.isNullOrBlank()) {
-                if (printerType == "Network") {
-                    Toast.makeText(context, "Sending Silent Print to $printerPath...", Toast.LENGTH_SHORT).show()
-                    mainActivity?.printHtmlSilently(htmlContent, printerPath)
-                } else {
-                    // Fallback for USB/BT until specific drivers added
-                    Toast.makeText(context, "Direct Silent via $printerType not yet fully implemented. Falling back.", Toast.LENGTH_SHORT).show()
-                    mainActivity?.printHtml(htmlContent)
-                }
+            val hasPathIfRequired = if (printerType == "USB") true else !printerPath.isNullOrBlank()
+
+            if (isSilentMode && hasPathIfRequired) {
+                Toast.makeText(context, "Silent Print request ($printerType)", Toast.LENGTH_SHORT).show()
+                mainActivity?.printHtmlSilently(htmlContent, printerPath ?: "")
             } else {
-                // Not in silent mode or not configured, show the modal
+                Toast.makeText(context, "Print request (System Dialog)", Toast.LENGTH_SHORT).show()
                 mainActivity?.printHtml(htmlContent)
             }
         }

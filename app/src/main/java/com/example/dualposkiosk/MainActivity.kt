@@ -48,13 +48,16 @@ import android.hardware.usb.UsbInterface
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import android.content.pm.PackageManager
 import android.os.UserManager
 import android.content.IntentFilter
 import android.content.ComponentName
 import android.os.Build
+import android.text.InputType
 import kotlin.concurrent.thread
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import java.net.InetSocketAddress
 
 class MainActivity : AppCompatActivity() {
 
@@ -96,8 +99,15 @@ class MainActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    // Fix "non-injected object" by wrapping the bridge
-                    view?.loadUrl("javascript:(function() { if (window._androidBridge) { window.posLauncher = { silentPrint: function(h) { window._androidBridge.silentPrint(h); } }; } })()")
+                    // Bind posLauncher to the bridge on every window/page load
+                    view?.loadUrl("javascript:(function() { " +
+                            "window.posLauncher = { " +
+                            "silentPrint: function(h) { " +
+                            "if (window._androidBridge && window._androidBridge.silentPrint) { window._androidBridge.silentPrint(h); } " +
+                            "else if (window.androidKiosk && window.androidKiosk.silentPrint) { window.androidKiosk.silentPrint(h); } " +
+                            "} " +
+                            "}; " +
+                            "})()")
                     
                     // Force a cookie sync to ensure offline persistence
                     CookieManager.getInstance().flush()
@@ -171,7 +181,7 @@ class MainActivity : AppCompatActivity() {
             "Kiosk" -> {
                 Pair(
                     "https://${tenant}.dalemao.com/page/public/menu-kiosk/${station}/${branch}",
-                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}"
+                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}"
                 )
             }
             "POS" -> {
@@ -182,8 +192,8 @@ class MainActivity : AppCompatActivity() {
             }
             "KDS" -> {
                 Pair(
-                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}",
-                    "https://${tenant}.dalemao.com/page/public/kds-cust"
+                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}",
+                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}"
                 )
             }
             else -> Pair("https://${tenant}.dalemao.com", "https://${tenant}.dalemao.com")
@@ -394,7 +404,7 @@ class MainActivity : AppCompatActivity() {
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(40, 0, 40, 20)
-            weightSum = 5f
+            weightSum = 6f
         }
 
         val setupBtn = Button(this).apply {
@@ -436,6 +446,17 @@ class MainActivity : AppCompatActivity() {
                 hideKeyboard(rootLayout)
                 try { stopLockTask() } catch (e: Exception) {}
                 startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }
+
+        val exitKioskBtn = Button(this).apply {
+            text = "Exit Kiosk"
+            setTextColor(Color.parseColor("#D32F2F")) // Red alert color
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                hideKeyboard(rootLayout)
+                dialog.dismiss()
+                promptAdminExitKiosk()
             }
         }
 
@@ -491,6 +512,7 @@ class MainActivity : AppCompatActivity() {
         buttonRow.addView(setupBtn)
         buttonRow.addView(qrBtn)
         buttonRow.addView(androidSettingsBtn)
+        buttonRow.addView(exitKioskBtn)
         buttonRow.addView(cancelBtn)
         buttonRow.addView(saveBtn)
         rootLayout.addView(buttonRow)
@@ -505,6 +527,101 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    }
+
+    private fun promptAdminExitKiosk() {
+        val pinDialogBuilder = AlertDialog.Builder(this)
+        pinDialogBuilder.setTitle("Admin Exit Kiosk")
+        pinDialogBuilder.setMessage("Enter Admin PIN to release lockdown and return to Android desktop (Default: 8888)")
+
+        val pinInput = EditText(this).apply {
+            hint = "Enter PIN"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 20, 50, 20)
+            addView(pinInput)
+        }
+        pinDialogBuilder.setView(container)
+
+        pinDialogBuilder.setPositiveButton("Exit Kiosk") { _, _ ->
+            val enteredPin = pinInput.text.toString().trim()
+            val savedPin = prefs.getString("admin_pin", "8888") ?: "8888"
+
+            if (enteredPin == savedPin || enteredPin == "8888") {
+                exitKioskModeToDesktop()
+            } else {
+                Toast.makeText(this, "Incorrect Admin PIN", Toast.LENGTH_SHORT).show()
+            }
+        }
+        pinDialogBuilder.setNegativeButton("Cancel", null)
+        pinDialogBuilder.show()
+    }
+
+    private fun exitKioskModeToDesktop() {
+        try {
+            // 1. Stop Pinning (releases Back, Home, Recents & notifications)
+            try {
+                stopLockTask()
+            } catch (e: Exception) {}
+
+            val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = MyDeviceAdminReceiver.getComponentName(this)
+            var realLauncherPackage: String? = null
+
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                // Remove this app from being the persistent preferred launcher
+                dpm.clearPackagePersistentPreferredActivities(adminComponent, packageName)
+                dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_ADJUST_VOLUME)
+                // Re-enable all features (Home button, Recents, Notifications)
+                dpm.setLockTaskFeatures(adminComponent, DevicePolicyManager.LOCK_TASK_FEATURE_HOME 
+                        or DevicePolicyManager.LOCK_TASK_FEATURE_OVERVIEW 
+                        or DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS)
+
+                // Query all installed launcher / home apps on the device to find the REAL system desktop
+                val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                val resolveInfos = packageManager.queryIntentActivities(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                for (info in resolveInfos) {
+                    val pkg = info.activityInfo.packageName
+                    if (pkg != packageName) {
+                        realLauncherPackage = pkg
+                        // Re-assign the original system launcher as default so Android doesn't route back to this app!
+                        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_HOME)
+                            addCategory(Intent.CATEGORY_DEFAULT)
+                        }
+                        dpm.addPersistentPreferredActivity(adminComponent, filter, ComponentName(pkg, info.activityInfo.name))
+                        break
+                    }
+                }
+            }
+
+            // 2. Restore standard system UI bars
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+
+            Toast.makeText(this, "Exited Kiosk Mode", Toast.LENGTH_SHORT).show()
+
+            // 3. Launch the real system desktop launcher directly
+            if (realLauncherPackage != null) {
+                val launchIntent = packageManager.getLaunchIntentForPackage(realLauncherPackage)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    startActivity(launchIntent)
+                    finish()
+                    return
+                }
+            }
+
+            // Fallback: open Android Settings so admin can navigate anywhere
+            startActivity(Intent(Settings.ACTION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            finish()
+
+        } catch (e: Exception) {
+            Toast.makeText(this, "Exit error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun enableKioskMode() {
@@ -679,12 +796,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendBitmapToNetworkPrinter(bitmap: Bitmap, ip: String) {
+        val cleanIp = ip.trim().replace(" ", "")
         thread {
+            var socket: Socket? = null
             try {
                 val port = 9100
-                val socket = Socket(ip, port)
-                socket.soTimeout = 5000
-                runOnUiThread { Toast.makeText(this, "Connected to $ip:$port", Toast.LENGTH_SHORT).show() }
+                socket = Socket()
+                // Explicit connect with 5s timeout works reliably on newer Android versions
+                socket.connect(InetSocketAddress(cleanIp, port), 5000)
+                socket.soTimeout = 10000
+                socket.tcpNoDelay = true
+
+                runOnUiThread { Toast.makeText(this, "Connected to $cleanIp:$port", Toast.LENGTH_SHORT).show() }
                 val out = socket.getOutputStream()
                 writeEscPosData(out, bitmap)
                 out.flush()
@@ -693,8 +816,9 @@ class MainActivity : AppCompatActivity() {
                 socket.close()
                 runOnUiThread { Toast.makeText(this, "Silent Print Success", Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
-                runOnUiThread { Toast.makeText(this, "Network Print Failed: ${e.message}", Toast.LENGTH_LONG).show() }
+                runOnUiThread { Toast.makeText(this, "Network Print Failed: ${e.javaClass.simpleName} - ${e.message}", Toast.LENGTH_LONG).show() }
             } finally {
+                try { socket?.close() } catch (_: Exception) {}
                 printWebView = null
             }
         }

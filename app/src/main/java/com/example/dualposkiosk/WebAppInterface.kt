@@ -33,6 +33,29 @@ class WebAppInterface(private val context: Context) {
         }
     }
 
+    /**
+     * Web page can invoke window.androidKiosk.reloadPage() or window.posLauncher.reloadPage()
+     * to trigger a clean reload of the active page without user interruption.
+     */
+    @JavascriptInterface
+    fun reloadPage() {
+        Handler(Looper.getMainLooper()).post {
+            val mainActivity = context as? MainActivity
+            mainActivity?.reloadKioskWebViews()
+        }
+    }
+
+    /**
+     * Optional reload to a specific URL (e.g. switching stations or resetting to home)
+     */
+    @JavascriptInterface
+    fun loadUrl(url: String) {
+        Handler(Looper.getMainLooper()).post {
+            val mainActivity = context as? MainActivity
+            mainActivity?.loadUrlInMainWebView(url)
+        }
+    }
+
     private fun isPrinter(device: UsbDevice): Boolean {
         // Standard USB Printer Class is 7
         return device.deviceClass == 7 || device.getInterface(0).interfaceClass == 7

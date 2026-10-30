@@ -4,6 +4,8 @@ import android.app.Presentation
 import android.content.Context
 import android.os.Bundle
 import android.view.Display
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -17,8 +19,19 @@ class SecondaryDisplay(context: Context, display: Display, private val url: Stri
         webView = WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
-            webViewClient = WebViewClient()
+            settings.allowFileAccess = true
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = true
+
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val cached = WebAssetCache.interceptRequest(request)
+                    if (cached != null) return cached
+                    return super.shouldInterceptRequest(view, request)
+                }
+            }
             loadUrl(this@SecondaryDisplay.url)
         }
         setContentView(webView)

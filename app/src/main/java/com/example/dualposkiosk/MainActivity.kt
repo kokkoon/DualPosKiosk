@@ -54,10 +54,15 @@ import android.content.IntentFilter
 import android.content.ComponentName
 import android.os.Build
 import android.text.InputType
+import android.webkit.WebResourceResponse
+import android.widget.CheckBox
 import kotlin.concurrent.thread
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
+import java.net.URL
 
 class MainActivity : AppCompatActivity() {
 
@@ -72,6 +77,9 @@ class MainActivity : AppCompatActivity() {
     private var tapCount = 0
     private var lastTapTime: Long = 0
 
+    // Embedded HTTP Network Print Server
+    private var printServer: KioskHttpServer? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -79,6 +87,12 @@ class MainActivity : AppCompatActivity() {
         val defaultUrl = "https://neohotels.dalemao.com/page/public/kds/all"
         val mainUrl = prefs.getString("main_url", defaultUrl) ?: defaultUrl
         val secondaryUrl: String = prefs.getString("sec_url", "https://neohotels.dalemao.com/page/public/kds/all") ?: "https://neohotels.dalemao.com/page/public/kds/all"
+
+        // Initialize High-Speed Disk Asset Cache
+        WebAssetCache.init(this)
+
+        // Initialize and start Print Server if role is enabled
+        initPrintServerIfEnabled()
 
         // Enable WebView debugging via Chrome on your MacBook (chrome://inspect)
         WebView.setWebContentsDebuggingEnabled(true)
@@ -88,7 +102,7 @@ class MainActivity : AppCompatActivity() {
             settings.domStorageEnabled = true
             settings.databaseEnabled = true
             
-            // --- OFFLINE SUPPORT ENHANCEMENTS ---
+            // --- OFFLINE & PERFORMANCE ENHANCEMENTS ---
             settings.cacheMode = WebSettings.LOAD_DEFAULT 
             settings.allowFileAccess = true
             settings.loadWithOverviewMode = true
@@ -97,6 +111,15 @@ class MainActivity : AppCompatActivity() {
             settings.userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
             
             webViewClient = object : WebViewClient() {
+                // Intercept static assets (images, webp, fonts) to serve directly from local flash storage
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val cachedResponse = WebAssetCache.interceptRequest(request)
+                    if (cachedResponse != null) {
+                        return cachedResponse
+                    }
+                    return super.shouldInterceptRequest(view, request)
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     // Bind posLauncher to the bridge on every window/page load
@@ -105,6 +128,14 @@ class MainActivity : AppCompatActivity() {
                             "silentPrint: function(h) { " +
                             "if (window._androidBridge && window._androidBridge.silentPrint) { window._androidBridge.silentPrint(h); } " +
                             "else if (window.androidKiosk && window.androidKiosk.silentPrint) { window.androidKiosk.silentPrint(h); } " +
+                            "}, " +
+                            "reloadPage: function() { " +
+                            "if (window._androidBridge && window._androidBridge.reloadPage) { window._androidBridge.reloadPage(); } " +
+                            "else if (window.androidKiosk && window.androidKiosk.reloadPage) { window.androidKiosk.reloadPage(); } " +
+                            "}, " +
+                            "loadUrl: function(u) { " +
+                            "if (window._androidBridge && window._androidBridge.loadUrl) { window._androidBridge.loadUrl(u); } " +
+                            "else if (window.androidKiosk && window.androidKiosk.loadUrl) { window.androidKiosk.loadUrl(u); } " +
                             "} " +
                             "}; " +
                             "})()")
@@ -290,10 +321,11 @@ class MainActivity : AppCompatActivity() {
             setSelection(if(prefs.getBoolean("silent_mode", false)) 1 else 0)
         }
         val printerConnSpinner = Spinner(this).apply {
-            val types = arrayOf("Network", "USB", "Bluetooth")
+            val types = arrayOf("Network", "USB", "Bluetooth", "API")
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, types)
             val saved = prefs.getString("printer_type", "Network")
-            setSelection(types.indexOf(saved))
+            val index = types.indexOf(saved)
+            setSelection(if (index >= 0) index else 0)
         }
 
         val usbStatusLabel = TextView(this).apply {
@@ -309,10 +341,28 @@ class MainActivity : AppCompatActivity() {
             setSelection(sizes.indexOf(saved))
         }
 
-        val printerPathLabel = TextView(this).apply { text = "Printer IP (Net) or Name (BT)" }
+        val printerPathLabel = TextView(this).apply { text = "Printer IP (Net/API) or Name (BT)" }
         val printerPathInput = EditText(this).apply {
-            hint = "192.168.1.100 or BT-Printer-Name"
+            hint = "192.168.1.100 or http://192.168.1.50:8080/print"
             setText(prefs.getString("printer_path", ""))
+        }
+
+        // --- PRINT SERVER ROLE CHECKBOX ---
+        val printServerCheckBox = CheckBox(this).apply {
+            text = "Enable Print Server Role (Port 8080)"
+            isChecked = prefs.getBoolean("print_server_role", false)
+            setTextColor(Color.DKGRAY)
+        }
+        val serverIpLabel = TextView(this).apply {
+            val ip = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
+            text = "Server Endpoint: http://$ip:8080/print"
+            textSize = 12f
+            setTextColor(Color.parseColor("#1565C0"))
+            setPadding(10, 0, 0, 10)
+            visibility = if (printServerCheckBox.isChecked) View.VISIBLE else View.GONE
+        }
+        printServerCheckBox.setOnCheckedChangeListener { _, isChecked ->
+            serverIpLabel.visibility = if (isChecked) View.VISIBLE else View.GONE
         }
 
         // Real-time USB Status Logic
@@ -334,9 +384,14 @@ class MainActivity : AppCompatActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = printerConnSpinner.selectedItem.toString()
                 usbStatusLabel.visibility = if (selected == "USB") View.VISIBLE else View.GONE
-                if (selected == "Network" || selected == "Bluetooth") {
+                if (selected == "Network" || selected == "Bluetooth" || selected == "API") {
                     printerPathLabel.visibility = View.VISIBLE
                     printerPathInput.visibility = View.VISIBLE
+                    printerPathLabel.text = when (selected) {
+                        "API" -> "Server URL (e.g. http://192.168.1.50:8080/print)"
+                        "Network" -> "Printer IP Address"
+                        else -> "Bluetooth Printer Name"
+                    }
                 } else {
                     printerPathLabel.visibility = View.GONE
                     printerPathInput.visibility = View.GONE
@@ -354,6 +409,8 @@ class MainActivity : AppCompatActivity() {
         rightColumn.addView(paperSizeSpinner)
         rightColumn.addView(printerPathLabel)
         rightColumn.addView(printerPathInput)
+        rightColumn.addView(printServerCheckBox)
+        rightColumn.addView(serverIpLabel)
 
         columnContainer.addView(leftColumn)
         columnContainer.addView(rightColumn)
@@ -486,6 +543,7 @@ class MainActivity : AppCompatActivity() {
                 val pType = printerConnSpinner.selectedItem.toString()
                 val pSize = paperSizeSpinner.selectedItem.toString()
                 val pPath = sanitize(printerPathInput.text.toString())
+                val isServerRole = printServerCheckBox.isChecked
 
                 val urls = generateUrls(tenant, station, branch, kitchen, mode)
                 
@@ -499,10 +557,18 @@ class MainActivity : AppCompatActivity() {
                     .putString("printer_type", pType)
                     .putString("paper_size", pSize)
                     .putString("printer_path", pPath)
+                    .putBoolean("print_server_role", isServerRole)
                     .putString("main_url", urls.first)
                     .putString("sec_url", urls.second)
                     .apply()
                 
+                // Start or stop print server dynamically based on the updated preference
+                if (isServerRole) {
+                    startPrintServer()
+                } else {
+                    stopPrintServer()
+                }
+
                 mainWebView.loadUrl(urls.first)
                 secondaryPresentation?.updateUrl(urls.second)
                 dialog.dismiss()
@@ -763,6 +829,7 @@ class MainActivity : AppCompatActivity() {
                                     "Network" -> sendBitmapToNetworkPrinter(trimmedBitmap, ip)
                                     "USB" -> sendBitmapToUsbPrinter(trimmedBitmap)
                                     "Bluetooth" -> sendBitmapToBluetoothPrinter(trimmedBitmap, ip)
+                                    "API" -> sendHtmlToApiPrintServer(htmlContent, ip)
                                 }
                             }
                         } catch (e: Exception) {
@@ -944,9 +1011,136 @@ class MainActivity : AppCompatActivity() {
         return data
     }
 
+    // --- PRINT SERVER MANAGEMENT ---
+    private fun initPrintServerIfEnabled() {
+        val isServerRole = prefs.getBoolean("print_server_role", false)
+        if (isServerRole) {
+            startPrintServer()
+        }
+    }
+
+    fun startPrintServer() {
+        if (printServer?.isServerRunning() == true) return
+        printServer = KioskHttpServer(
+            context = this,
+            port = 8080,
+            onPrintHtmlRequest = { html ->
+                // Incoming remote HTML receipt: render and print to local USB printer
+                printHtmlSilently(html, "")
+            },
+            onPrintRawBytes = { rawBytes ->
+                // Direct ESC/POS bytes: send directly to USB printer
+                sendRawBytesToUsbPrinter(rawBytes)
+            }
+        )
+        printServer?.start()
+        val ip = KioskHttpServer.getDeviceIpAddress(this)
+        Toast.makeText(this, "Print Server Active on http://$ip:8080", Toast.LENGTH_SHORT).show()
+    }
+
+    fun stopPrintServer() {
+        printServer?.stop()
+        printServer = null
+        Toast.makeText(this, "Print Server Stopped", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun sendRawBytesToUsbPrinter(rawBytes: ByteArray): Boolean {
+        val usbManager = getSystemService(USB_SERVICE) as UsbManager
+        val deviceList = usbManager.deviceList
+        val printer = deviceList.values.firstOrNull { it.deviceClass == 7 || it.getInterface(0).interfaceClass == 7 }
+        if (printer == null) {
+            runOnUiThread { Toast.makeText(this, "Print Server: No USB Printer detected", Toast.LENGTH_LONG).show() }
+            return false
+        }
+
+        try {
+            val connection = usbManager.openDevice(printer) ?: return false
+            val usbInterface = printer.getInterface(0)
+            val endpoint = (0 until usbInterface.endpointCount)
+                .map { usbInterface.getEndpoint(it) }
+                .firstOrNull { it.direction == UsbConstants.USB_DIR_OUT } ?: return false
+
+            connection.claimInterface(usbInterface, true)
+            connection.bulkTransfer(endpoint, rawBytes, rawBytes.size, 15000)
+            connection.releaseInterface(usbInterface)
+            connection.close()
+            runOnUiThread { Toast.makeText(this, "Print Server: USB Print Success", Toast.LENGTH_SHORT).show() }
+            return true
+        } catch (e: Exception) {
+            runOnUiThread { Toast.makeText(this, "Print Server USB Error: ${e.message}", Toast.LENGTH_LONG).show() }
+            return false
+        }
+    }
+
+    // --- API CLIENT PRINT SENDER ---
+    private fun sendHtmlToApiPrintServer(htmlContent: String, serverUrl: String) {
+        val targetUrl = if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
+            serverUrl
+        } else {
+            "http://$serverUrl:8080/print"
+        }
+
+        thread {
+            try {
+                val url = URL(targetUrl)
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 5000
+                    readTimeout = 10000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("User-Agent", "DualPosKiosk-Client")
+                }
+
+                val payload = JSONObject().apply {
+                    put("html", htmlContent)
+                }.toString()
+
+                conn.outputStream.use { out ->
+                    out.write(payload.toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
+
+                val code = conn.responseCode
+                if (code == 200) {
+                    runOnUiThread { Toast.makeText(this, "API Print Dispatched to $targetUrl", Toast.LENGTH_SHORT).show() }
+                } else {
+                    runOnUiThread { Toast.makeText(this, "API Print Failed (HTTP $code)", Toast.LENGTH_LONG).show() }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "API Print Connection Error: ${e.message}", Toast.LENGTH_LONG).show() }
+            } finally {
+                printWebView = null
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        printServer?.stop()
+    }
+
     private fun hideKeyboard(view: View) {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(view.windowToken, 0)
+    }
+
+    fun reloadKioskWebViews() {
+        runOnUiThread {
+            mainWebView.reload()
+            val secondaryUrl = prefs.getString("sec_url", "")
+            if (!secondaryUrl.isNullOrBlank()) {
+                secondaryPresentation?.updateUrl(secondaryUrl)
+            }
+        }
+    }
+
+    fun loadUrlInMainWebView(url: String) {
+        runOnUiThread {
+            if (url.isNotBlank()) {
+                mainWebView.loadUrl(url)
+            }
+        }
     }
 
     inner class KioskJavaScriptInterface {
@@ -966,6 +1160,16 @@ class MainActivity : AppCompatActivity() {
                     printHtml(htmlContent)
                 }
             }
+        }
+
+        @JavascriptInterface
+        fun reloadPage() {
+            reloadKioskWebViews()
+        }
+
+        @JavascriptInterface
+        fun loadUrl(url: String) {
+            loadUrlInMainWebView(url)
         }
     }
 }

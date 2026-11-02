@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
@@ -112,24 +113,39 @@ class KioskHttpServer(
                 }
 
                 path == "/print" && method == "POST" -> {
-                    // Read request body
-                    val bodyBytes = ByteArray(contentLength)
-                    var readTotal = 0
-                    while (readTotal < contentLength) {
-                        val read = input.read(bodyBytes, readTotal, contentLength - readTotal)
-                        if (read == -1) break
-                        readTotal += read
+                    val clientIp = socket.inetAddress?.hostAddress ?: "remote"
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(context, "Print Server: Request from $clientIp", Toast.LENGTH_SHORT).show()
                     }
-                    val body = String(bodyBytes, Charsets.UTF_8)
+
+                    // Read request body through the SAME reader to prevent stream buffering deadlocks
+                    val body = if (contentLength > 0) {
+                        val bodyChars = CharArray(contentLength)
+                        var totalRead = 0
+                        while (totalRead < contentLength) {
+                            val read = reader.read(bodyChars, totalRead, contentLength - totalRead)
+                            if (read == -1) break
+                            totalRead += read
+                        }
+                        String(bodyChars, 0, totalRead)
+                    } else {
+                        ""
+                    }
 
                     val success = processPrintPayload(body)
                     if (success) {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Print Server: Dispatched to USB", Toast.LENGTH_SHORT).show()
+                        }
                         val resp = JSONObject().apply {
                             put("success", true)
                             put("message", "Print job dispatched successfully")
                         }.toString()
                         sendResponse(output, 200, "OK", "application/json", resp)
                     } else {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Print Server: Invalid payload", Toast.LENGTH_LONG).show()
+                        }
                         val err = JSONObject().apply {
                             put("success", false)
                             put("error", "No valid 'html', 'raw' (base64), or 'text' payload found")

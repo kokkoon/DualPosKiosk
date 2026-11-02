@@ -1,6 +1,7 @@
 package com.example.dualposkiosk
 
 import android.R
+import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
@@ -52,6 +53,7 @@ import android.content.pm.PackageManager
 import android.os.UserManager
 import android.content.IntentFilter
 import android.content.ComponentName
+import android.hardware.usb.UsbEndpoint
 import android.os.Build
 import android.text.InputType
 import android.webkit.WebResourceResponse
@@ -427,7 +429,16 @@ class MainActivity : AppCompatActivity() {
             text = "Test Print"
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                printHtml("<html><body><h1>Test Print Success</h1><p>The Android Print system is working correctly!</p></body></html>")
+                val isSilent = printMethodSpinner.selectedItemPosition == 1
+                val pType = printerConnSpinner.selectedItem.toString()
+                val pPath = printerPathInput.text.toString().trim()
+                val testHtml = "<html><body style='text-align:center;'><h1>Test Print Success</h1><p>The Android Print system is working correctly via $pType!</p></body></html>"
+
+                if (isSilent) {
+                    printHtmlSilently(testHtml, pPath)
+                } else {
+                    printHtml(testHtml)
+                }
             }
         }
 
@@ -902,24 +913,69 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // 1. Check and request explicit permission if not yet granted (crucial for TV boxes)
+        if (!usbManager.hasPermission(printer)) {
+            val permissionIntent = PendingIntent.getBroadcast(
+                this, 0, Intent("com.example.dualposkiosk.USB_PERMISSION"),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_MUTABLE
+                } else {
+                    0
+                }
+            )
+            usbManager.requestPermission(printer, permissionIntent)
+            runOnUiThread { Toast.makeText(this, "Requesting USB permission for printer...", Toast.LENGTH_SHORT).show() }
+            printWebView = null
+            return
+        }
+
         thread {
             try {
                 val connection = usbManager.openDevice(printer)
-                val usbInterface = printer.getInterface(0)
-                val endpoint = (0 until usbInterface.endpointCount)
-                    .map { usbInterface.getEndpoint(it) }
-                    .firstOrNull { it.direction == UsbConstants.USB_DIR_OUT }
+                if (connection == null) {
+                    runOnUiThread { Toast.makeText(this, "USB Error: Cannot open device connection", Toast.LENGTH_LONG).show() }
+                    return@thread
+                }
 
-                if (connection != null && endpoint != null) {
-                    connection.claimInterface(usbInterface, true)
-                    connection.bulkTransfer(endpoint, byteArrayOf(0x1B, 0x40), 2, 5000)
+                // Scan all interfaces & endpoints to find the correct OUT endpoint
+                var targetInterface: UsbInterface? = null
+                var targetEndpoint: UsbEndpoint? = null
+
+                for (i in 0 until printer.interfaceCount) {
+                    val uif = printer.getInterface(i)
+                    for (e in 0 until uif.endpointCount) {
+                        val ep = uif.getEndpoint(e)
+                        if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                            targetInterface = uif
+                            targetEndpoint = ep
+                            break
+                        }
+                    }
+                    if (targetEndpoint != null) break
+                }
+
+                if (targetInterface != null && targetEndpoint != null) {
+                    connection.claimInterface(targetInterface, true)
+                    
+                    // ESC/POS Reset & Init
+                    connection.bulkTransfer(targetEndpoint, byteArrayOf(0x1B, 0x40), 2, 5000)
+                    
                     val data = convertBitmapToEscPos(bitmap)
-                    connection.bulkTransfer(endpoint, data, data.size, 15000)
+                    val bytesWritten = connection.bulkTransfer(targetEndpoint, data, data.size, 15000)
+                    
                     val cutCmd = byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x41, 0x00)
-                    connection.bulkTransfer(endpoint, cutCmd, cutCmd.size, 5000)
-                    connection.releaseInterface(usbInterface)
+                    connection.bulkTransfer(targetEndpoint, cutCmd, cutCmd.size, 5000)
+                    
+                    connection.releaseInterface(targetInterface)
                     connection.close()
-                    runOnUiThread { Toast.makeText(this, "Silent Print Success", Toast.LENGTH_SHORT).show() }
+
+                    if (bytesWritten >= 0) {
+                        runOnUiThread { Toast.makeText(this, "Silent Print (USB) Success", Toast.LENGTH_SHORT).show() }
+                    } else {
+                        runOnUiThread { Toast.makeText(this, "USB Error: Transfer failed ($bytesWritten)", Toast.LENGTH_LONG).show() }
+                    }
+                } else {
+                    runOnUiThread { Toast.makeText(this, "USB Error: No OUT endpoint found", Toast.LENGTH_LONG).show() }
                 }
             } catch (e: Exception) {
                 runOnUiThread { Toast.makeText(this, "USB Print Error: ${e.message}", Toast.LENGTH_LONG).show() }
@@ -1053,19 +1109,47 @@ class MainActivity : AppCompatActivity() {
             return false
         }
 
+        if (!usbManager.hasPermission(printer)) {
+            val permissionIntent = PendingIntent.getBroadcast(
+                this, 0, Intent("com.example.dualposkiosk.USB_PERMISSION"),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_MUTABLE
+                } else {
+                    0
+                }
+            )
+            usbManager.requestPermission(printer, permissionIntent)
+            return false
+        }
+
         try {
             val connection = usbManager.openDevice(printer) ?: return false
-            val usbInterface = printer.getInterface(0)
-            val endpoint = (0 until usbInterface.endpointCount)
-                .map { usbInterface.getEndpoint(it) }
-                .firstOrNull { it.direction == UsbConstants.USB_DIR_OUT } ?: return false
+            var targetInterface: UsbInterface? = null
+            var targetEndpoint: UsbEndpoint? = null
 
-            connection.claimInterface(usbInterface, true)
-            connection.bulkTransfer(endpoint, rawBytes, rawBytes.size, 15000)
-            connection.releaseInterface(usbInterface)
+            for (i in 0 until printer.interfaceCount) {
+                val uif = printer.getInterface(i)
+                for (e in 0 until uif.endpointCount) {
+                    val ep = uif.getEndpoint(e)
+                    if (ep.direction == UsbConstants.USB_DIR_OUT) {
+                        targetInterface = uif
+                        targetEndpoint = ep
+                        break
+                    }
+                }
+                if (targetEndpoint != null) break
+            }
+
+            if (targetInterface != null && targetEndpoint != null) {
+                connection.claimInterface(targetInterface, true)
+                connection.bulkTransfer(targetEndpoint, rawBytes, rawBytes.size, 15000)
+                connection.releaseInterface(targetInterface)
+                connection.close()
+                runOnUiThread { Toast.makeText(this, "Print Server: USB Print Success", Toast.LENGTH_SHORT).show() }
+                return true
+            }
             connection.close()
-            runOnUiThread { Toast.makeText(this, "Print Server: USB Print Success", Toast.LENGTH_SHORT).show() }
-            return true
+            return false
         } catch (e: Exception) {
             runOnUiThread { Toast.makeText(this, "Print Server USB Error: ${e.message}", Toast.LENGTH_LONG).show() }
             return false

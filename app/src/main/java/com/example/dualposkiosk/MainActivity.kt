@@ -62,6 +62,7 @@ import kotlin.concurrent.thread
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.URL
@@ -343,6 +344,14 @@ class MainActivity : AppCompatActivity() {
             setSelection(sizes.indexOf(saved))
         }
 
+        val printerModeSpinner = Spinner(this).apply {
+            val modes = arrayOf("Thermal (Standard)", "Dot Matrix (Epson TM-U220)")
+            adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, modes)
+            val saved = prefs.getString("printer_mode", "Thermal (Standard)")
+            val idx = modes.indexOf(saved)
+            setSelection(if (idx >= 0) idx else 0)
+        }
+
         val printerPathLabel = TextView(this).apply { text = "Printer IP (Net/API) or Name (BT)" }
         val printerPathInput = EditText(this).apply {
             hint = "192.168.1.100 or http://192.168.1.50:8080/print"
@@ -407,6 +416,8 @@ class MainActivity : AppCompatActivity() {
         rightColumn.addView(TextView(this).apply { text = "Connection" })
         rightColumn.addView(printerConnSpinner)
         rightColumn.addView(usbStatusLabel)
+        rightColumn.addView(TextView(this).apply { text = "Printer Tech" })
+        rightColumn.addView(printerModeSpinner)
         rightColumn.addView(TextView(this).apply { text = "Paper Size" })
         rightColumn.addView(paperSizeSpinner)
         rightColumn.addView(printerPathLabel)
@@ -552,6 +563,7 @@ class MainActivity : AppCompatActivity() {
                 
                 val isSilent = printMethodSpinner.selectedItemPosition == 1
                 val pType = printerConnSpinner.selectedItem.toString()
+                val pMode = printerModeSpinner.selectedItem.toString()
                 val pSize = paperSizeSpinner.selectedItem.toString()
                 val pPath = sanitize(printerPathInput.text.toString())
                 val isServerRole = printServerCheckBox.isChecked
@@ -566,6 +578,7 @@ class MainActivity : AppCompatActivity() {
                     .putString("station_mode", mode)
                     .putBoolean("silent_mode", isSilent)
                     .putString("printer_type", pType)
+                    .putString("printer_mode", pMode)
                     .putString("paper_size", pSize)
                     .putString("printer_path", pPath)
                     .putBoolean("print_server_role", isServerRole)
@@ -775,12 +788,23 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             val density = resources.displayMetrics.density
             val paperSize = prefs.getString("paper_size", "80mm")
+            val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
+            val isDotMatrix = printerMode?.contains("Dot Matrix", ignoreCase = true) == true
             
-            // 80mm = 640px wide, 58mm = 384px wide
-            val printerWidthPx = if (paperSize == "58mm") 384 else 640
+            // TM-U220 impact printer is 76mm paper width (~288 dots at ~80 DPI).
+            // Thermal 80mm is 640 dots, 58mm is 384 dots.
+            val printerWidthPx = when {
+                isDotMatrix -> 288
+                paperSize == "58mm" -> 384
+                else -> 640
+            }
             
             // Virtual width in DP to force consistent font sizing
-            val renderWidthDp = if (paperSize == "58mm") 280 else 300 
+            val renderWidthDp = when {
+                isDotMatrix -> 240
+                paperSize == "58mm" -> 280
+                else -> 300
+            } 
 
             val webView = WebView(this)
             val rootLayout = findViewById<ViewGroup>(R.id.content)
@@ -957,14 +981,21 @@ class MainActivity : AppCompatActivity() {
                 if (targetInterface != null && targetEndpoint != null) {
                     connection.claimInterface(targetInterface, true)
                     
-                    // ESC/POS Reset & Init
-                    connection.bulkTransfer(targetEndpoint, byteArrayOf(0x1B, 0x40), 2, 5000)
+                    val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
+                    val isDotMatrix = printerMode?.contains("Dot Matrix", ignoreCase = true) == true
                     
-                    val data = convertBitmapToEscPos(bitmap)
-                    val bytesWritten = connection.bulkTransfer(targetEndpoint, data, data.size, 15000)
-                    
-                    val cutCmd = byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x41, 0x00)
-                    connection.bulkTransfer(targetEndpoint, cutCmd, cutCmd.size, 5000)
+                    val bytesWritten: Int
+                    if (isDotMatrix) {
+                        val data = convertBitmapToEscPosImpact(bitmap)
+                        bytesWritten = connection.bulkTransfer(targetEndpoint, data, data.size, 30000)
+                    } else {
+                        // ESC/POS Reset & Init
+                        connection.bulkTransfer(targetEndpoint, byteArrayOf(0x1B, 0x40), 2, 5000)
+                        val data = convertBitmapToEscPos(bitmap)
+                        bytesWritten = connection.bulkTransfer(targetEndpoint, data, data.size, 15000)
+                        val cutCmd = byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x41, 0x00)
+                        connection.bulkTransfer(targetEndpoint, cutCmd, cutCmd.size, 5000)
+                    }
                     
                     connection.releaseInterface(targetInterface)
                     connection.close()
@@ -1023,11 +1054,70 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun writeEscPosData(out: OutputStream, bitmap: Bitmap) {
-        out.write(byteArrayOf(0x1B, 0x40))
-        Thread.sleep(100)
-        val data = convertBitmapToEscPos(bitmap)
-        out.write(data)
-        out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x41, 0x00))
+        val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
+        if (printerMode?.contains("Dot Matrix", ignoreCase = true) == true) {
+            val data = convertBitmapToEscPosImpact(bitmap)
+            out.write(data)
+        } else {
+            out.write(byteArrayOf(0x1B, 0x40)) // ESC @ Initialize
+            Thread.sleep(100)
+            val data = convertBitmapToEscPos(bitmap)
+            out.write(data)
+            out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x41, 0x00)) // Feed & Cut
+        }
+    }
+
+    /**
+     * Converts a bitmap into Epson TM-U220 ESC/POS Impact needle slice commands (ESC * m nL nH).
+     * Slices the bitmap into vertical 8-dot columns per pass.
+     */
+    private fun convertBitmapToEscPosImpact(bitmap: Bitmap): ByteArray {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val out = ByteArrayOutputStream()
+
+        // 1. Initialize printer
+        out.write(byteArrayOf(0x1B, 0x40)) // ESC @
+
+        // 2. Set line spacing to 8 dots (ESC 3 16 or ESC 3 24 depending on density, standard 8-pin slice is ESC 3 16)
+        out.write(byteArrayOf(0x1B, 0x33, 16))
+
+        // 3. Process image in 8-dot high bands
+        var y = 0
+        while (y < height) {
+            // ESC * m nL nH (m = 0: 8-dot single density)
+            val nL = (width % 256).toByte()
+            val nH = (width / 256).toByte()
+            out.write(byteArrayOf(0x1B, 0x2A, 0, nL, nH))
+
+            for (x in 0 until width) {
+                var sliceByte = 0
+                for (b in 0 until 8) {
+                    val currentY = y + b
+                    if (currentY < height) {
+                        val pixel = pixels[currentY * width + x]
+                        // If dark pixel, set bit (bit 7 is topmost dot)
+                        if (Color.red(pixel) < 140 || Color.green(pixel) < 140 || Color.blue(pixel) < 140) {
+                            sliceByte = sliceByte or (0x80 shr b)
+                        }
+                    }
+                }
+                out.write(sliceByte)
+            }
+            // Line feed after each 8-dot band
+            out.write(byteArrayOf(0x0A))
+            y += 8
+        }
+
+        // 4. Reset line spacing to default (ESC 2)
+        out.write(byteArrayOf(0x1B, 0x32))
+
+        // 5. Feed 4 lines and Cut
+        out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x0A, 0x1B, 0x69)) // ESC i (Partial cut on TM-U220)
+        return out.toByteArray()
     }
 
     private fun convertBitmapToEscPos(bitmap: Bitmap): ByteArray {

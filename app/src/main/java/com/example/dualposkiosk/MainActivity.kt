@@ -338,10 +338,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         val paperSizeSpinner = Spinner(this).apply {
-            val sizes = arrayOf("80mm", "58mm")
+            val sizes = arrayOf("80mm", "76mm", "58mm")
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, sizes)
             val saved = prefs.getString("paper_size", "80mm")
-            setSelection(sizes.indexOf(saved))
+            val idx = sizes.indexOf(saved)
+            setSelection(if (idx >= 0) idx else 0)
         }
 
         val printerModeSpinner = Spinner(this).apply {
@@ -350,6 +351,17 @@ class MainActivity : AppCompatActivity() {
             val saved = prefs.getString("printer_mode", "Thermal (Standard)")
             val idx = modes.indexOf(saved)
             setSelection(if (idx >= 0) idx else 0)
+
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val mode = modes[position]
+                    if (mode.contains("Dot Matrix", ignoreCase = true)) {
+                        // Automatically suggest 76mm for TM-U220 impact printers
+                        paperSizeSpinner.setSelection(1) // 76mm index
+                    }
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
         }
 
         val printerPathLabel = TextView(this).apply { text = "Printer IP (Net/API) or Name (BT)" }
@@ -791,17 +803,18 @@ class MainActivity : AppCompatActivity() {
             val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
             val isDotMatrix = printerMode?.contains("Dot Matrix", ignoreCase = true) == true
             
-            // TM-U220 impact printer is 76mm paper width (~288 dots at ~80 DPI).
+            // TM-U220 physical dot width across 76mm paper is exactly 240 dots (40 columns).
             // Thermal 80mm is 640 dots, 58mm is 384 dots.
             val printerWidthPx = when {
-                isDotMatrix -> 288
+                isDotMatrix -> 240
                 paperSize == "58mm" -> 384
+                paperSize == "76mm" -> 512
                 else -> 640
             }
             
-            // Virtual width in DP to force consistent font sizing
+            // Virtual width in DP: for TM-U220 we render at 200 DP so text expands and fits the 240 dots perfectly
             val renderWidthDp = when {
-                isDotMatrix -> 240
+                isDotMatrix -> 200
                 paperSize == "58mm" -> 280
                 else -> 300
             } 
@@ -818,6 +831,8 @@ class MainActivity : AppCompatActivity() {
             webView.settings.useWideViewPort = true
             webView.settings.loadWithOverviewMode = true
 
+            // For Dot Matrix we ensure clean margin:0 and left-alignment so no characters are clipped on the right
+            val bodyAlign = if (isDotMatrix) "left" else "center"
             val styledHtml = """
                 <html>
                 <head>
@@ -828,6 +843,7 @@ class MainActivity : AppCompatActivity() {
                             margin: 0 !important; 
                             padding: 0 !important; 
                             background-color: white !important;
+                            text-align: $bodyAlign !important;
                         }
                         * { word-wrap: break-word; box-sizing: border-box; }
                         img, table, div { max-width: 100% !important; }

@@ -56,6 +56,48 @@ class WebAppInterface(private val context: Context) {
         }
     }
 
+    /**
+     * Controls the 7-color USB Alarm Light directly from web JavaScript!
+     * color: "red", "yellow", "green", "white", "cyan", "purple", "blue", "off"
+     * mode: "solid", "slow", "fast"
+     * buzzer: true / false
+     */
+    @JavascriptInterface
+    fun setAlarmLight(color: String, mode: String = "solid", buzzer: Boolean = false) {
+        val c = color.lowercase().trim()
+        val m = mode.lowercase().trim()
+
+        when (c) {
+            "off" -> UsbAlarmLightManager.turnOff(context)
+            "red" -> when (m) {
+                "fast" -> UsbAlarmLightManager.flashFastRed(context, buzzer)
+                "slow" -> UsbAlarmLightManager.flashSlowRed(context, buzzer)
+                else -> UsbAlarmLightManager.solidRed(context, buzzer)
+            }
+            "yellow" -> when (m) {
+                "fast" -> UsbAlarmLightManager.flashFastYellow(context)
+                "slow" -> UsbAlarmLightManager.flashSlowYellow(context)
+                else -> UsbAlarmLightManager.solidYellow(context)
+            }
+            "green" -> when (m) {
+                "fast" -> UsbAlarmLightManager.flashFastGreen(context)
+                "slow" -> UsbAlarmLightManager.flashSlowGreen(context)
+                else -> UsbAlarmLightManager.solidGreen(context)
+            }
+            "blue" -> when (m) {
+                "fast" -> UsbAlarmLightManager.flashFastBlue(context)
+                "slow" -> UsbAlarmLightManager.flashSlowBlue(context)
+                else -> UsbAlarmLightManager.solidBlue(context)
+            }
+            "white" -> UsbAlarmLightManager.solidWhite(context)
+            "cyan" -> UsbAlarmLightManager.solidCyan(context)
+            "purple" -> UsbAlarmLightManager.solidPurple(context)
+            "buzzer_on" -> UsbAlarmLightManager.buzzerOn(context)
+            "buzzer_off" -> UsbAlarmLightManager.buzzerOff(context)
+            else -> UsbAlarmLightManager.turnOff(context)
+        }
+    }
+
     private fun isPrinter(device: UsbDevice): Boolean {
         // Standard USB Printer Class is 7
         return device.deviceClass == 7 || device.getInterface(0).interfaceClass == 7

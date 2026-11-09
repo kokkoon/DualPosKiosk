@@ -139,6 +139,9 @@ class MainActivity : AppCompatActivity() {
                             "loadUrl: function(u) { " +
                             "if (window._androidBridge && window._androidBridge.loadUrl) { window._androidBridge.loadUrl(u); } " +
                             "else if (window.androidKiosk && window.androidKiosk.loadUrl) { window.androidKiosk.loadUrl(u); } " +
+                            "}, " +
+                            "setAlarmLight: function(c, m, b) { " +
+                            "if (window.androidKiosk && window.androidKiosk.setAlarmLight) { window.androidKiosk.setAlarmLight(c, m || 'solid', b || false); } " +
                             "} " +
                             "}; " +
                             "})()")
@@ -423,11 +426,25 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
+        // Real-time USB Alarm Light Status
+        val lightStatusLabel = TextView(this).apply {
+            val lightDevice = UsbAlarmLightManager.findAlarmLightDevice(this@MainActivity)
+            if (lightDevice != null) {
+                text = "● USB Alarm Light Ready"
+                setTextColor(Color.parseColor("#2E7D32")) // Green
+            } else {
+                text = "○ USB Alarm Light NOT Found"
+                setTextColor(Color.GRAY)
+            }
+            setPadding(10, 5, 0, 10)
+        }
+
         rightColumn.addView(TextView(this).apply { text = "Print Method" })
         rightColumn.addView(printMethodSpinner)
         rightColumn.addView(TextView(this).apply { text = "Connection" })
         rightColumn.addView(printerConnSpinner)
         rightColumn.addView(usbStatusLabel)
+        rightColumn.addView(lightStatusLabel)
         rightColumn.addView(TextView(this).apply { text = "Printer Tech" })
         rightColumn.addView(printerModeSpinner)
         rightColumn.addView(TextView(this).apply { text = "Paper Size" })
@@ -441,11 +458,11 @@ class MainActivity : AppCompatActivity() {
         columnContainer.addView(rightColumn)
         rootLayout.addView(columnContainer)
 
-        // --- 4. BOTTOM: TEST PRINT & UPDATE CHECK ---
+        // --- 4. BOTTOM: TEST PRINT, TEST LIGHT & UPDATE CHECK ---
         val actionsLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 10, 0, 10)
-            weightSum = 2f
+            weightSum = 3f
         }
 
         val testPrintBtn = Button(this).apply {
@@ -462,6 +479,21 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     printHtml(testHtml)
                 }
+            }
+        }
+
+        val testLightBtn = Button(this).apply {
+            text = "Test Light"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                // Test cycle: Flash Red + Beep, then Solid Green
+                UsbAlarmLightManager.flashFastRed(this@MainActivity, buzzer = true)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    UsbAlarmLightManager.solidGreen(this@MainActivity)
+                }, 2000)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    UsbAlarmLightManager.turnOff(this@MainActivity)
+                }, 4000)
             }
         }
 
@@ -483,6 +515,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         actionsLayout.addView(testPrintBtn)
+        actionsLayout.addView(testLightBtn)
         actionsLayout.addView(updateBtn)
         rootLayout.addView(actionsLayout)
 

@@ -154,6 +154,39 @@ class KioskHttpServer(
                     }
                 }
 
+                path == "/light" && method == "POST" -> {
+                    val body = if (contentLength > 0) {
+                        val bodyChars = CharArray(contentLength)
+                        var totalRead = 0
+                        while (totalRead < contentLength) {
+                            val read = reader.read(bodyChars, totalRead, contentLength - totalRead)
+                            if (read == -1) break
+                            totalRead += read
+                        }
+                        String(bodyChars, 0, totalRead)
+                    } else ""
+
+                    try {
+                        val json = JSONObject(body)
+                        val color = json.optString("color", "red")
+                        val mode = json.optString("mode", "solid")
+                        val buzzer = json.optBoolean("buzzer", false)
+
+                        val webApp = WebAppInterface(context)
+                        webApp.setAlarmLight(color, mode, buzzer)
+
+                        val resp = JSONObject().apply {
+                            put("success", true)
+                            put("color", color)
+                            put("mode", mode)
+                            put("buzzer", buzzer)
+                        }.toString()
+                        sendResponse(output, 200, "OK", "application/json", resp)
+                    } catch (e: Exception) {
+                        sendResponse(output, 400, "Bad Request", "application/json", "{\"error\":\"${e.message}\"}")
+                    }
+                }
+
                 else -> {
                     sendResponse(output, 404, "Not Found", "application/json", "{\"error\":\"Not Found\"}")
                 }

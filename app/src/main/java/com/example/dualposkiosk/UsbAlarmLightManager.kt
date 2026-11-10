@@ -55,9 +55,10 @@ object UsbAlarmLightManager {
 
     /**
      * Sends Modbus RTU Command to the Alarm Light.
-     * Command format: Station(1B) + Function(06) + RegAddr(00 C2) + ActionCode(2B) + CRC16(2B)
+     * We send to both Station FF (Broadcast default from manual p.4) and Station 01 (default from p.3/p.6)
+     * so it works regardless of whether the factory set it to 01 or FF.
      */
-    fun sendCommand(context: Context, actionCode: Int, stationId: Byte = 0xFF.toByte()): Boolean {
+    fun sendCommand(context: Context, actionCode: Int): Boolean {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val device = findAlarmLightDevice(context) ?: run {
             Log.w(TAG, "No Alarm Light device found")
@@ -69,23 +70,32 @@ object UsbAlarmLightManager {
             return false
         }
 
-        // Build Modbus RTU frame
-        val rawFrame = byteArrayOf(
-            stationId,
-            0x06.toByte(),
-            0x00.toByte(),
-            0xC2.toByte(),
-            ((actionCode shr 8) and 0xFF).toByte(),
-            (actionCode and 0xFF).toByte()
-        )
+        // Try both default stations: 0xFF (broadcast) and 0x01 (standard default)
+        val stations = byteArrayOf(0xFF.toByte(), 0x01.toByte())
+        var anySuccess = false
 
-        val crc = calculateCRC16(rawFrame)
-        val fullPacket = ByteArray(rawFrame.size + 2)
-        System.arraycopy(rawFrame, 0, fullPacket, 0, rawFrame.size)
-        fullPacket[rawFrame.size] = (crc and 0xFF).toByte()          // CRC Low
-        fullPacket[rawFrame.size + 1] = ((crc shr 8) and 0xFF).toByte() // CRC High
+        for (st in stations) {
+            val rawFrame = byteArrayOf(
+                st,
+                0x06.toByte(),
+                0x00.toByte(),
+                0xC2.toByte(),
+                ((actionCode shr 8) and 0xFF).toByte(),
+                (actionCode and 0xFF).toByte()
+            )
 
-        return sendRawSerial(usbManager, device, fullPacket)
+            val crc = calculateCRC16(rawFrame)
+            val fullPacket = ByteArray(rawFrame.size + 2)
+            System.arraycopy(rawFrame, 0, fullPacket, 0, rawFrame.size)
+            fullPacket[rawFrame.size] = (crc and 0xFF).toByte()          // CRC Low
+            fullPacket[rawFrame.size + 1] = ((crc shr 8) and 0xFF).toByte() // CRC High
+
+            if (sendRawSerial(usbManager, device, fullPacket)) {
+                anySuccess = true
+            }
+        }
+
+        return anySuccess
     }
 
     // High level helper actions per user manual:
@@ -165,35 +175,44 @@ object UsbAlarmLightManager {
     }
 
     /**
-     * Initializes CH340 chip registers for baud rate via controlTransfer.
+     * Initializes CH340 chip registers per official WCH / Linux driver specification:
+     * - Vendor control requests:
+     *   0xA1: reset / check
+     *   0x9A: set baud rate (reg 0x1312 and 0x0F2C)
+     *   0xA4: set modem control / line control (8 data bits, 1 stop bit, no parity, enable RX/TX)
      */
     private fun initCH340BaudRate(conn: UsbDeviceConnection, baudRate: Int) {
+        // Standard Linux driver formula for CH340 baud rate prescaler & factor
         val factor: Int
         val divisor: Int
         when (baudRate) {
             4800 -> {
-                factor = 0x64
-                divisor = 0xB2
+                factor = 0x18
+                divisor = 0x64
             }
             9600 -> {
-                factor = 0xB2
-                divisor = 0xD9
-            }
-            115200 -> {
-                factor = 0xCC
-                divisor = 0xF3
+                factor = 0x0C
+                divisor = 0xB2
             }
             else -> {
-                factor = 0x64
-                divisor = 0xB2
+                factor = 0x18
+                divisor = 0x64
             }
         }
 
-        // CH340 initialization sequence
+        // 1. Reset / handshake
         conn.controlTransfer(0x40, 0xA1, 0, 0, null, 0, 1000)
-        conn.controlTransfer(0x40, 0x9A, 0x1312, (factor shl 8) or divisor, null, 0, 1000)
-        conn.controlTransfer(0x40, 0x9A, 0x0F2C, 0x0000, null, 0, 1000)
-        conn.controlTransfer(0x40, 0xA4, 0x00FF, 0, null, 0, 1000)
+
+        // 2. Set Baud Rate register 0x1312 and 0x0F2C
+        val val1 = (divisor shl 8) or 0x82
+        val val2 = factor
+        conn.controlTransfer(0x40, 0x9A, 0x1312, val1, null, 0, 1000)
+        conn.controlTransfer(0x40, 0x9A, 0x0F2C, val2, null, 0, 1000)
+
+        // 3. Set line control: 8 data bits, 1 stop bit, no parity, DTR & RTS high, enable TX & RX
+        // 0x501F / 0xD90A is CH340 line config
+        conn.controlTransfer(0x40, 0x9A, 0x2518, 0x00C3, null, 0, 1000) // 8N1
+        conn.controlTransfer(0x40, 0xA4, 0x00FF, 0, null, 0, 1000) // DTR & RTS
     }
 
     /**

@@ -53,9 +53,15 @@ import android.content.pm.PackageManager
 import android.os.UserManager
 import android.content.IntentFilter
 import android.content.ComponentName
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbEndpoint
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
+import android.view.Gravity
 import android.webkit.WebResourceResponse
 import android.widget.CheckBox
 import kotlin.concurrent.thread
@@ -239,29 +245,52 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val builder = AlertDialog.Builder(this)
-        builder.setTitle("Kiosk Settings")
 
-        val scrollContainer = ScrollView(this)
+        val scrollContainer = ScrollView(this).apply {
+            isFillViewport = true
+        }
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 20)
+            setPadding(30, 20, 30, 20)
         }
 
-        // --- 1. TOP: CLOSE KEYBOARD ---
+        // --- 1. TOP HEADER: TITLE + CLOSE KEYBOARD IN-LINE ---
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 15)
+        }
+        val titleView = TextView(this).apply {
+            text = "Kiosk Settings"
+            textSize = 20f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
         val hideKeyboardBtn = Button(this).apply {
             text = "Close Keyboard"
+            textSize = 12f
+            setPadding(25, 10, 25, 10)
             setOnClickListener { hideKeyboard(this) }
         }
-        rootLayout.addView(hideKeyboardBtn)
+        headerRow.addView(titleView)
+        headerRow.addView(hideKeyboardBtn)
+        rootLayout.addView(headerRow)
 
-        // --- 2. STATION MODE (Top, full width) ---
-        rootLayout.addView(TextView(this).apply { 
-            text = "Station Mode"
-            setPadding(0, 20, 0, 0)
-            typeface = Typeface.DEFAULT_BOLD 
-        })
-        
-        // Define IDs first for logic access
+        // --- 2. TWO COLUMN LAYOUT ---
+        val columnContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 10)
+            weightSum = 2f
+        }
+
+        // LEFT COLUMN (IDs & System Config)
+        val leftColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(0, 0, 20, 0)
+        }
+
+        // Station Mode integrated into top of left column
         val kitchenLabel = TextView(this).apply { text = "Kitchen ID" }
         val kitchenInput = EditText(this).apply { hint = "Kitchen"; setText(prefs.getString("kitchen", "all")) }
 
@@ -285,27 +314,14 @@ class MainActivity : AppCompatActivity() {
                 override fun onNothingSelected(p0: AdapterView<*>?) {}
             }
         }
-        rootLayout.addView(modeSpinner)
-
-        // --- 3. TWO COLUMN LAYOUT ---
-        val columnContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 20, 0, 20)
-            weightSum = 2f
-        }
-
-        // LEFT COLUMN (IDs)
-        val leftColumn = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setPadding(0, 0, 20, 0)
-        }
 
         val tenantInput = EditText(this).apply { hint = "Tenant"; setText(prefs.getString("tenant", "neohotels")) }
         val stationInput = EditText(this).apply { hint = "Station"; setText(prefs.getString("station", "all")) }
         val branchInput = EditText(this).apply { hint = "Branch"; setText(prefs.getString("branch", "")) }
 
-        leftColumn.addView(TextView(this).apply { text = "Tenant ID" })
+        leftColumn.addView(TextView(this).apply { text = "Station Mode"; typeface = Typeface.DEFAULT_BOLD })
+        leftColumn.addView(modeSpinner)
+        leftColumn.addView(TextView(this).apply { text = "Tenant ID"; setPadding(0, 10, 0, 0) })
         leftColumn.addView(tenantInput)
         leftColumn.addView(TextView(this).apply { text = "Station ID" })
         leftColumn.addView(stationInput)
@@ -314,7 +330,7 @@ class MainActivity : AppCompatActivity() {
         leftColumn.addView(kitchenLabel)
         leftColumn.addView(kitchenInput)
 
-        // RIGHT COLUMN (Printing)
+        // RIGHT COLUMN (Printer, Light & Server Setup)
         val rightColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -326,18 +342,13 @@ class MainActivity : AppCompatActivity() {
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, methods)
             setSelection(if(prefs.getBoolean("silent_mode", false)) 1 else 0)
         }
+
         val printerConnSpinner = Spinner(this).apply {
             val types = arrayOf("Network", "USB", "Bluetooth", "API")
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, types)
             val saved = prefs.getString("printer_type", "Network")
             val index = types.indexOf(saved)
             setSelection(if (index >= 0) index else 0)
-        }
-
-        val usbStatusLabel = TextView(this).apply {
-            text = "Checking USB..."
-            setPadding(10, 5, 0, 10)
-            setTextColor(Color.GRAY)
         }
 
         val paperSizeSpinner = Spinner(this).apply {
@@ -359,7 +370,6 @@ class MainActivity : AppCompatActivity() {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                     val mode = modes[position]
                     if (mode.contains("Dot Matrix", ignoreCase = true)) {
-                        // Automatically suggest 76mm for TM-U220 impact printers
                         paperSizeSpinner.setSelection(1) // 76mm index
                     }
                 }
@@ -373,43 +383,167 @@ class MainActivity : AppCompatActivity() {
             setText(prefs.getString("printer_path", ""))
         }
 
-        // --- PRINT SERVER ROLE CHECKBOX ---
-        val printServerCheckBox = CheckBox(this).apply {
-            text = "Enable Print Server Role (Port 8080)"
-            isChecked = prefs.getBoolean("print_server_role", false)
-            setTextColor(Color.DKGRAY)
+        // --- HARDWARE & NETWORK STATUS CARD ---
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 16, 20, 16)
+            // Elevated card with subtle border for crisp contrast in dark theme
+            val shape = GradientDrawable().apply {
+                setColor(Color.parseColor("#21272B")) // Deep card background
+                cornerRadius = 12f
+                setStroke(2, Color.parseColor("#37474F")) // Subtle border outline
+            }
+            background = shape
         }
-        val serverIpLabel = TextView(this).apply {
-            val ip = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
-            text = "Server Endpoint: http://$ip:8080/print"
+        statusCard.addView(TextView(this).apply {
+            text = "HARDWARE & NETWORK STATUS"
             textSize = 12f
-            setTextColor(Color.parseColor("#1565C0"))
-            setPadding(10, 0, 0, 10)
-            visibility = if (printServerCheckBox.isChecked) View.VISIBLE else View.GONE
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#90CAF9")) // High-contrast cyan/blue accent
+            setPadding(0, 0, 0, 8)
+        })
+
+        val kioskNetworkStatusLabel = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 3, 0, 5)
         }
-        printServerCheckBox.setOnCheckedChangeListener { _, isChecked ->
-            serverIpLabel.visibility = if (isChecked) View.VISIBLE else View.GONE
+        val printerStatusLabel = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 3, 0, 5)
+        }
+        val alarmLightStatusLabel = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 3, 0, 3)
         }
 
-        // Real-time USB Status Logic
-        val updateUsbStatus = {
-            val usbManager = getSystemService(USB_SERVICE) as UsbManager
-            val deviceList = usbManager.deviceList
-            val printer = deviceList.values.firstOrNull { it.deviceClass == 7 || it.getInterface(0).interfaceClass == 7 }
-            if (printer != null) {
-                usbStatusLabel.text = "● USB Printer Ready: ${printer.productName ?: "Thermal Printer"}"
-                usbStatusLabel.setTextColor(Color.parseColor("#2E7D32")) // Green
+        statusCard.addView(kioskNetworkStatusLabel)
+        statusCard.addView(printerStatusLabel)
+        statusCard.addView(alarmLightStatusLabel)
+
+        // Real-time Status Probes
+        val updateAllStatuses = {
+            // 1. Kiosk Network Status
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNet = cm.activeNetwork
+            val caps = cm.getNetworkCapabilities(activeNet)
+            val isWifi = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            val isEthernet = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+            val localIp = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
+
+            if (isWifi) {
+                kioskNetworkStatusLabel.text = "● Network: Wi-Fi Connected ($localIp)"
+                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#66BB6A")) // Bright Mint Green
+            } else if (isEthernet) {
+                kioskNetworkStatusLabel.text = "● Network: Ethernet Connected ($localIp)"
+                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
             } else {
-                usbStatusLabel.text = "○ USB Printer NOT Connected"
-                usbStatusLabel.setTextColor(Color.RED)
+                kioskNetworkStatusLabel.text = "○ Network: Offline (No Wi-Fi/LAN)"
+                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#EF5350")) // Bright Coral Red
+            }
+
+            // 2. Alarm Light Status
+            val lightDevice = UsbAlarmLightManager.findAlarmLightDevice(this@MainActivity)
+            if (lightDevice != null) {
+                alarmLightStatusLabel.text = "● USB Alarm Light: Ready"
+                alarmLightStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
+            } else {
+                alarmLightStatusLabel.text = "○ USB Alarm Light: Not Found"
+                alarmLightStatusLabel.setTextColor(Color.parseColor("#B0BEC5")) // Readable Light Slate
+            }
+
+            // 3. Printer Status (Dynamic by Connection type)
+            val selectedConn = printerConnSpinner.selectedItem.toString()
+            when (selectedConn) {
+                "USB" -> {
+                    val usbManager = getSystemService(USB_SERVICE) as UsbManager
+                    val printer = usbManager.deviceList.values.firstOrNull { it.deviceClass == 7 || it.getInterface(0).interfaceClass == 7 }
+                    if (printer != null) {
+                        printerStatusLabel.text = "● USB Printer: Ready (${printer.productName ?: "Printer"})"
+                        printerStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
+                    } else {
+                        printerStatusLabel.text = "○ USB Printer: Not Connected"
+                        printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                    }
+                }
+                "Network" -> {
+                    val ip = printerPathInput.text.toString().trim().replace(" ", "")
+                    val ipRegex = Regex("""^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$""")
+                    if (ip.isEmpty()) {
+                        printerStatusLabel.text = "○ Network Printer: No IP specified"
+                        printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                    } else if (!ipRegex.matches(ip)) {
+                        printerStatusLabel.text = "Checking IP format ($ip)..."
+                        printerStatusLabel.setTextColor(Color.parseColor("#B0BEC5"))
+                    } else {
+                        printerStatusLabel.text = "Checking Network Printer ($ip:9100)..."
+                        printerStatusLabel.setTextColor(Color.parseColor("#B0BEC5"))
+                        thread {
+                            var reachable = false
+                            try {
+                                val s = Socket()
+                                s.connect(InetSocketAddress(ip, 9100), 1500)
+                                s.close()
+                                reachable = true
+                            } catch (_: Exception) {}
+                            runOnUiThread {
+                                val currentInput = printerPathInput.text.toString().trim().replace(" ", "")
+                                if (currentInput == ip) {
+                                    if (reachable) {
+                                        printerStatusLabel.text = "● Network Printer: Online ($ip:9100)"
+                                        printerStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
+                                    } else {
+                                        printerStatusLabel.text = "○ Network Printer: Unreachable at $ip:9100"
+                                        printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "Bluetooth" -> {
+                    val targetName = printerPathInput.text.toString().trim()
+                    val btAdapter = BluetoothAdapter.getDefaultAdapter()
+                    if (btAdapter == null || !btAdapter.isEnabled) {
+                        printerStatusLabel.text = "○ Bluetooth: Disabled"
+                        printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                    } else {
+                        var deviceName = "Printer"
+                        val paired = try {
+                            val d = btAdapter.bondedDevices.firstOrNull { it.name?.contains(targetName, true) == true || it.address.equals(targetName, true) }
+                            if (d != null) deviceName = d.name ?: "Printer"
+                            d
+                        } catch (_: SecurityException) { null }
+
+                        if (paired != null) {
+                            printerStatusLabel.text = "● Bluetooth Printer: Paired ($deviceName)"
+                            printerStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
+                        } else {
+                            printerStatusLabel.text = "○ Bluetooth Printer: Not Paired"
+                            printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                        }
+                    }
+                }
+                "API" -> {
+                    val serverUrl = printerPathInput.text.toString().trim()
+                    if (serverUrl.isEmpty()) {
+                        printerStatusLabel.text = "○ API Print Server: No URL specified"
+                        printerStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                    } else {
+                        printerStatusLabel.text = "● API Print Server: Configured"
+                        printerStatusLabel.setTextColor(Color.parseColor("#90CAF9"))
+                    }
+                }
             }
         }
-        updateUsbStatus()
 
+        // Debounced typing handler for Network IP
+        val debounceHandler = Handler(Looper.getMainLooper())
+        var pendingCheckRunnable: Runnable? = null
+
+        // Check printer status on connection type change
         printerConnSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = printerConnSpinner.selectedItem.toString()
-                usbStatusLabel.visibility = if (selected == "USB") View.VISIBLE else View.GONE
                 if (selected == "Network" || selected == "Bluetooth" || selected == "API") {
                     printerPathLabel.visibility = View.VISIBLE
                     printerPathInput.visibility = View.VISIBLE
@@ -422,46 +556,76 @@ class MainActivity : AppCompatActivity() {
                     printerPathLabel.visibility = View.GONE
                     printerPathInput.visibility = View.GONE
                 }
+                updateAllStatuses()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // Real-time USB Alarm Light Status
-        val lightStatusLabel = TextView(this).apply {
-            val lightDevice = UsbAlarmLightManager.findAlarmLightDevice(this@MainActivity)
-            if (lightDevice != null) {
-                text = "● USB Alarm Light Ready"
-                setTextColor(Color.parseColor("#2E7D32")) // Green
-            } else {
-                text = "○ USB Alarm Light NOT Found"
-                setTextColor(Color.GRAY)
+        printerPathInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                pendingCheckRunnable?.let { debounceHandler.removeCallbacks(it) }
+                pendingCheckRunnable = Runnable { updateAllStatuses() }
+                debounceHandler.postDelayed(pendingCheckRunnable!!, 800) // 800ms debounce
             }
-            setPadding(10, 5, 0, 10)
+        })
+
+        printerPathInput.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                pendingCheckRunnable?.let { debounceHandler.removeCallbacks(it) }
+                updateAllStatuses()
+            }
         }
 
-        rightColumn.addView(TextView(this).apply { text = "Print Method" })
+        // --- PRINT SERVER ROLE (In-line checkbox & high-contrast white label) ---
+        val printServerBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 10, 0, 8)
+        }
+        val serverIpLabel = TextView(this).apply {
+            val ip = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
+            text = "Endpoint: http://$ip:8080/print"
+            textSize = 12f
+            setTextColor(Color.parseColor("#90CAF9")) // High-contrast light blue
+            setPadding(36, 0, 0, 5)
+            visibility = if (prefs.getBoolean("print_server_role", false)) View.VISIBLE else View.GONE
+        }
+        val printServerCheckBox = CheckBox(this).apply {
+            text = "API Print Server Service (Port 8080)"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = prefs.getBoolean("print_server_role", false)
+            setTextColor(Color.WHITE) // Crisp high-contrast white text
+            setOnCheckedChangeListener { _, isChecked ->
+                serverIpLabel.visibility = if (isChecked) View.VISIBLE else View.GONE
+            }
+        }
+
+        printServerBox.addView(printServerCheckBox)
+        printServerBox.addView(serverIpLabel)
+
+        rightColumn.addView(TextView(this).apply { text = "Print Method"; typeface = Typeface.DEFAULT_BOLD })
         rightColumn.addView(printMethodSpinner)
-        rightColumn.addView(TextView(this).apply { text = "Connection" })
+        rightColumn.addView(TextView(this).apply { text = "Printer Connection"; setPadding(0, 6, 0, 0) })
         rightColumn.addView(printerConnSpinner)
-        rightColumn.addView(usbStatusLabel)
-        rightColumn.addView(lightStatusLabel)
-        rightColumn.addView(TextView(this).apply { text = "Printer Tech" })
+        rightColumn.addView(TextView(this).apply { text = "Printer Tech"; setPadding(0, 6, 0, 0) })
         rightColumn.addView(printerModeSpinner)
-        rightColumn.addView(TextView(this).apply { text = "Paper Size" })
+        rightColumn.addView(TextView(this).apply { text = "Paper Size"; setPadding(0, 6, 0, 0) })
         rightColumn.addView(paperSizeSpinner)
         rightColumn.addView(printerPathLabel)
         rightColumn.addView(printerPathInput)
-        rightColumn.addView(printServerCheckBox)
-        rightColumn.addView(serverIpLabel)
+        rightColumn.addView(printServerBox)
+        rightColumn.addView(statusCard)
 
         columnContainer.addView(leftColumn)
         columnContainer.addView(rightColumn)
         rootLayout.addView(columnContainer)
 
-        // --- 4. BOTTOM: TEST PRINT, TEST LIGHT & UPDATE CHECK ---
+        // --- 3. BOTTOM ACTIONS: TEST PRINT, TEST LIGHT & UPDATE ---
         val actionsLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 10, 0, 10)
+            setPadding(0, 8, 0, 8)
             weightSum = 3f
         }
 
@@ -486,7 +650,6 @@ class MainActivity : AppCompatActivity() {
             text = "Test Light"
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                // Test cycle: Flash Red + Beep, then Solid Green
                 UsbAlarmLightManager.flashFastRed(this@MainActivity, buzzer = true)
                 Handler(Looper.getMainLooper()).postDelayed({
                     UsbAlarmLightManager.solidGreen(this@MainActivity)
@@ -524,10 +687,10 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = builder.create()
 
-        // --- 5. CUSTOM BUTTON ROW (Bottom) ---
+        // --- 4. BOTTOM ACTION ROW (Setup, QR, Android, Exit, Cancel, Save) ---
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(40, 0, 40, 20)
+            setPadding(30, 0, 30, 15)
             weightSum = 6f
         }
 
@@ -655,12 +818,9 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
         
         val displayMetrics = resources.displayMetrics
-        val width = if (displayMetrics.widthPixels > displayMetrics.heightPixels) {
-            (displayMetrics.widthPixels * 0.90).toInt() 
-        } else {
-            (displayMetrics.widthPixels * 0.95).toInt() 
-        }
-        dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        val width = (displayMetrics.widthPixels * 0.98).toInt()
+        val height = (displayMetrics.heightPixels * 0.95).toInt()
+        dialog.window?.setLayout(width, height)
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
 
@@ -836,18 +996,18 @@ class MainActivity : AppCompatActivity() {
             val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
             val isDotMatrix = printerMode?.contains("Dot Matrix", ignoreCase = true) == true
             
-            // TM-U220 physical dot width across 76mm paper is exactly 240 dots (40 columns).
+            // TM-U220 physical dot width across 76mm paper at 72 DPI (m=0 single density) is 180 dots.
             // Thermal 80mm is 640 dots, 58mm is 384 dots.
             val printerWidthPx = when {
-                isDotMatrix -> 240
+                isDotMatrix -> 180
                 paperSize == "58mm" -> 384
                 paperSize == "76mm" -> 512
                 else -> 640
             }
             
-            // Virtual width in DP: for TM-U220 we render at 200 DP so text expands and fits the 240 dots perfectly
+            // Virtual width in DP: set to 180 DP for TM-U220 so all content stays within the physical carriage
             val renderWidthDp = when {
-                isDotMatrix -> 200
+                isDotMatrix -> 180
                 paperSize == "58mm" -> 280
                 else -> 300
             } 
@@ -864,27 +1024,47 @@ class MainActivity : AppCompatActivity() {
             webView.settings.useWideViewPort = true
             webView.settings.loadWithOverviewMode = true
 
-            // For Dot Matrix we ensure clean margin:0 and left-alignment so no characters are clipped on the right
-            val bodyAlign = if (isDotMatrix) "left" else "center"
-            val styledHtml = """
-                <html>
-                <head>
-                    <meta name="viewport" content="width=${renderWidthDp}, initial-scale=1.0">
-                    <style>
-                        body { 
-                            width: ${renderWidthDp}px !important; 
-                            margin: 0 !important; 
-                            padding: 0 !important; 
-                            background-color: white !important;
-                            text-align: $bodyAlign !important;
-                        }
-                        * { word-wrap: break-word; box-sizing: border-box; }
-                        img, table, div { max-width: 100% !important; }
-                    </style>
-                </head>
-                <body>$htmlContent</body>
-                </html>
-            """.trimIndent()
+            // Generate isolated styling:
+            // 1. Thermal: Clean v1.3.0 CSS preserving receipt's natural centering and 10px safe margin (no aggressive overrides)
+            // 2. Dot Matrix: Zero-margin left-aligned CSS calibrated for TM-U220 mechanical needles
+            val styledHtml = if (isDotMatrix) {
+                """
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=${renderWidthDp}, initial-scale=1.0">
+                        <style>
+                            * { margin: 0 !important; padding: 0 !important; box-sizing: border-box !important; word-wrap: break-word !important; }
+                            body { 
+                                width: ${renderWidthDp}px !important; 
+                                background-color: white !important;
+                                text-align: left !important;
+                            }
+                            img, table, div { max-width: 100% !important; margin: 0 !important; }
+                        </style>
+                    </head>
+                    <body>$htmlContent</body>
+                    </html>
+                """.trimIndent()
+            } else {
+                """
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=${renderWidthDp}, initial-scale=1.0">
+                        <style>
+                            body { 
+                                width: ${renderWidthDp}px !important; 
+                                margin: 0 !important; 
+                                padding: 0 !important; 
+                                background-color: white !important;
+                            }
+                            * { word-wrap: break-word; box-sizing: border-box; }
+                            img, table, div { max-width: 100% !important; }
+                        </style>
+                    </head>
+                    <body>$htmlContent</body>
+                    </html>
+                """.trimIndent()
+            }
 
             val renderWidthPx = (renderWidthDp * density).toInt()
             webView.layout(0, 0, renderWidthPx, 10000)

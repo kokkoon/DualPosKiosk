@@ -1122,7 +1122,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        val finalHeight = Math.min(lastContentRow + 20, height)
+        val printerMode = prefs.getString("printer_mode", "Thermal (Standard)")
+        val isDotMatrix = printerMode?.contains("Dot Matrix", ignoreCase = true) == true
+        // Safe buffer: 60px for Dot Matrix (~15mm), 20px for Thermal (~2.5mm)
+        val buffer = if (isDotMatrix) 60 else 20
+        val finalHeight = Math.min(lastContentRow + buffer, height)
         return Bitmap.createBitmap(bmp, 0, 0, width, finalHeight)
     }
 
@@ -1344,8 +1348,10 @@ class MainActivity : AppCompatActivity() {
         // 4. Reset line spacing to default (ESC 2)
         out.write(byteArrayOf(0x1B, 0x32))
 
-        // 5. Feed 4 lines and Cut
-        out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x0A, 0x1B, 0x69)) // ESC i (Partial cut on TM-U220)
+        // 5. Feed paper past the cutter blade (~32mm / 8-9 lines) then cut
+        // On TM-U220, the physical needles are located ~30mm below the cutter blade
+        out.write(byteArrayOf(0x1B, 0x64, 0x08)) // ESC d 8 (Feed 8 lines)
+        out.write(byteArrayOf(0x1B, 0x69))       // ESC i (Partial cut)
         return out.toByteArray()
     }
 

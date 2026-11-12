@@ -148,6 +148,13 @@ class MainActivity : AppCompatActivity() {
                             "}, " +
                             "setAlarmLight: function(c, m, b) { " +
                             "if (window.androidKiosk && window.androidKiosk.setAlarmLight) { window.androidKiosk.setAlarmLight(c, m || 'solid', b || false); } " +
+                            "}, " +
+                            "getEdcStatus: function() { " +
+                            "if (window.androidKiosk && window.androidKiosk.getEdcStatus) { return window.androidKiosk.getEdcStatus(); } " +
+                            "return JSON.stringify({enabled:false,status:'DISABLED'}); " +
+                            "}, " +
+                            "initEdcPayment: function(p) { " +
+                            "if (window.androidKiosk && window.androidKiosk.initEdcPayment) { window.androidKiosk.initEdcPayment(typeof p === 'string' ? p : JSON.stringify(p)); } " +
                             "} " +
                             "}; " +
                             "})()")
@@ -246,19 +253,16 @@ class MainActivity : AppCompatActivity() {
     private fun showSettingsDialog() {
         val builder = AlertDialog.Builder(this)
 
-        val scrollContainer = ScrollView(this).apply {
-            isFillViewport = true
-        }
-        val rootLayout = LinearLayout(this).apply {
+        val rootContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
+            setPadding(24, 16, 24, 16)
         }
 
-        // --- 1. TOP HEADER: TITLE + CLOSE KEYBOARD IN-LINE ---
+        // --- 1. FIXED TOP HEADER: TITLE + CLOSE KEYBOARD IN-LINE ---
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, 15)
+            setPadding(0, 0, 0, 10)
         }
         val titleView = TextView(this).apply {
             text = "Kiosk Settings"
@@ -269,28 +273,57 @@ class MainActivity : AppCompatActivity() {
         val hideKeyboardBtn = Button(this).apply {
             text = "Close Keyboard"
             textSize = 12f
-            setPadding(25, 10, 25, 10)
+            setPadding(25, 8, 25, 8)
             setOnClickListener { hideKeyboard(this) }
         }
         headerRow.addView(titleView)
         headerRow.addView(hideKeyboardBtn)
-        rootLayout.addView(headerRow)
+        rootContainer.addView(headerRow)
 
-        // --- 2. TWO COLUMN LAYOUT ---
-        val columnContainer = LinearLayout(this).apply {
+        // --- 2. TAB SELECTOR BAR (General, Printer, Payment/EDC) ---
+        var activeTab = 0 // 0 = General, 1 = Printer, 2 = Payment/EDC
+        val tabContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 10, 0, 10)
-            weightSum = 2f
+            setPadding(0, 0, 0, 10)
+            weightSum = 3f
         }
 
-        // LEFT COLUMN (IDs & System Config)
-        val leftColumn = LinearLayout(this).apply {
+        val tabGeneralBtn = Button(this)
+        val tabPrinterBtn = Button(this)
+        val tabEdcBtn = Button(this)
+
+        val tabButtons = listOf(tabGeneralBtn, tabPrinterBtn, tabEdcBtn)
+        val tabTitles = listOf("⚙️ General", "🖨️ Printer", "💳 Payment/EDC")
+
+        for (i in tabButtons.indices) {
+            val btn = tabButtons[i]
+            btn.text = tabTitles[i]
+            btn.textSize = 13f
+            btn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            tabContainer.addView(btn)
+        }
+        rootContainer.addView(tabContainer)
+
+        // --- 3. SCROLLABLE MIDDLE CONTAINER (Weight = 1f: guarantees smooth scrolling on all screens!) ---
+        val scrollContainer = ScrollView(this).apply {
+            isFillViewport = true
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val tabContentLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setPadding(0, 0, 20, 0)
+            setPadding(0, 5, 0, 10)
         }
 
-        // Station Mode integrated into top of left column
+        // ====== TAB 1: GENERAL & STATION CONFIG ======
+        val tabGeneralView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
         val kitchenLabel = TextView(this).apply { text = "Kitchen ID" }
         val kitchenInput = EditText(this).apply { hint = "Kitchen"; setText(prefs.getString("kitchen", "all")) }
 
@@ -299,7 +332,7 @@ class MainActivity : AppCompatActivity() {
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, modes)
             val savedMode = prefs.getString("station_mode", "Kiosk")
             setSelection(modes.indexOf(savedMode))
-            
+
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(p0: AdapterView<*>?, p1: View?, pos: Int, p3: Long) {
                     val mode = modes[pos]
@@ -319,22 +352,21 @@ class MainActivity : AppCompatActivity() {
         val stationInput = EditText(this).apply { hint = "Station"; setText(prefs.getString("station", "all")) }
         val branchInput = EditText(this).apply { hint = "Branch"; setText(prefs.getString("branch", "")) }
 
-        leftColumn.addView(TextView(this).apply { text = "Station Mode"; typeface = Typeface.DEFAULT_BOLD })
-        leftColumn.addView(modeSpinner)
-        leftColumn.addView(TextView(this).apply { text = "Tenant ID"; setPadding(0, 10, 0, 0) })
-        leftColumn.addView(tenantInput)
-        leftColumn.addView(TextView(this).apply { text = "Station ID" })
-        leftColumn.addView(stationInput)
-        leftColumn.addView(TextView(this).apply { text = "Branch ID" })
-        leftColumn.addView(branchInput)
-        leftColumn.addView(kitchenLabel)
-        leftColumn.addView(kitchenInput)
+        tabGeneralView.addView(TextView(this).apply { text = "Station Mode"; typeface = Typeface.DEFAULT_BOLD })
+        tabGeneralView.addView(modeSpinner)
+        tabGeneralView.addView(TextView(this).apply { text = "Tenant ID"; setPadding(0, 10, 0, 0) })
+        tabGeneralView.addView(tenantInput)
+        tabGeneralView.addView(TextView(this).apply { text = "Station ID"; setPadding(0, 10, 0, 0) })
+        tabGeneralView.addView(stationInput)
+        tabGeneralView.addView(TextView(this).apply { text = "Branch ID"; setPadding(0, 10, 0, 0) })
+        tabGeneralView.addView(branchInput)
+        tabGeneralView.addView(kitchenLabel)
+        tabGeneralView.addView(kitchenInput)
 
-        // RIGHT COLUMN (Printer, Light & Server Setup)
-        val rightColumn = LinearLayout(this).apply {
+        // ====== TAB 2: PRINTER CONFIG ======
+        val tabPrinterView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setPadding(20, 0, 0, 0)
+            visibility = View.GONE
         }
 
         val printMethodSpinner = Spinner(this).apply {
@@ -383,44 +415,131 @@ class MainActivity : AppCompatActivity() {
             setText(prefs.getString("printer_path", ""))
         }
 
-        // --- HARDWARE & NETWORK STATUS CARD ---
+        // --- PRINT SERVER ROLE ---
+        val printServerBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 10, 0, 8)
+        }
+        val serverIpLabel = TextView(this).apply {
+            val ip = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
+            text = "Endpoint: http://$ip:8080/print"
+            textSize = 12f
+            setTextColor(Color.parseColor("#90CAF9"))
+            setPadding(36, 0, 0, 5)
+            visibility = if (prefs.getBoolean("print_server_role", false)) View.VISIBLE else View.GONE
+        }
+        val printServerCheckBox = CheckBox(this).apply {
+            text = "API Print Server Service (Port 8080)"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = prefs.getBoolean("print_server_role", false)
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, isChecked ->
+                serverIpLabel.visibility = if (isChecked) View.VISIBLE else View.GONE
+            }
+        }
+        printServerBox.addView(printServerCheckBox)
+        printServerBox.addView(serverIpLabel)
+
+        tabPrinterView.addView(TextView(this).apply { text = "Print Method"; typeface = Typeface.DEFAULT_BOLD })
+        tabPrinterView.addView(printMethodSpinner)
+        tabPrinterView.addView(TextView(this).apply { text = "Printer Connection"; setPadding(0, 8, 0, 0) })
+        tabPrinterView.addView(printerConnSpinner)
+        tabPrinterView.addView(TextView(this).apply { text = "Printer Tech"; setPadding(0, 8, 0, 0) })
+        tabPrinterView.addView(printerModeSpinner)
+        tabPrinterView.addView(TextView(this).apply { text = "Paper Size"; setPadding(0, 8, 0, 0) })
+        tabPrinterView.addView(paperSizeSpinner)
+        tabPrinterView.addView(printerPathLabel)
+        tabPrinterView.addView(printerPathInput)
+        tabPrinterView.addView(printServerBox)
+
+        // ====== TAB 3: PAYMENT / EDC CONFIG ======
+        val tabEdcView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+
+        val edcModelSpinner = Spinner(this).apply {
+            val models = arrayOf("None (Web Payment / Dynamic)", "Hexa ECR (Bank Mandiri / Ingenico)", "Mock Simulator")
+            adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, models)
+            val savedModel = prefs.getString("edc_model", "None (Web Payment / Dynamic)")
+            val idx = models.indexOf(savedModel)
+            setSelection(if (idx >= 0) idx else 0)
+        }
+
+        val edcPortLabel = TextView(this).apply {
+            text = "EDC Connection Port"
+            setPadding(0, 10, 0, 0)
+        }
+        val edcPortSpinner = Spinner(this).apply {
+            val ports = arrayOf("USB (Baud 9600)", "RS232 Serial (Baud 115200)")
+            adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, ports)
+        }
+
+        val edcTimeoutLabel = TextView(this).apply {
+            text = "Transaction Timeout (Seconds)"
+            setPadding(0, 10, 0, 0)
+        }
+        val edcTimeoutInput = EditText(this).apply {
+            hint = "60"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(prefs.getInt("edc_timeout_sec", 60).toString())
+        }
+
+        val edcHelpText = TextView(this).apply {
+            text = "💡 Web application can check EDC availability via window.posLauncher.getEdcStatus() and initiate payments with window.posLauncher.initEdcPayment()."
+            textSize = 12f
+            setTextColor(Color.parseColor("#B0BEC5"))
+            setPadding(0, 12, 0, 10)
+        }
+
+        tabEdcView.addView(TextView(this).apply { text = "EDC Hardware Model"; typeface = Typeface.DEFAULT_BOLD })
+        tabEdcView.addView(edcModelSpinner)
+        tabEdcView.addView(edcPortLabel)
+        tabEdcView.addView(edcPortSpinner)
+        tabEdcView.addView(edcTimeoutLabel)
+        tabEdcView.addView(edcTimeoutInput)
+        tabEdcView.addView(edcHelpText)
+
+        // Add tabs to scroll layout
+        tabContentLayout.addView(tabGeneralView)
+        tabContentLayout.addView(tabPrinterView)
+        tabContentLayout.addView(tabEdcView)
+        scrollContainer.addView(tabContentLayout)
+        rootContainer.addView(scrollContainer)
+
+        // --- 4. PERSISTENT HARDWARE & NETWORK STATUS CARD (Always Visible) ---
         val statusCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 16, 20, 16)
-            // Elevated card with subtle border for crisp contrast in dark theme
+            setPadding(16, 10, 16, 10)
             val shape = GradientDrawable().apply {
-                setColor(Color.parseColor("#21272B")) // Deep card background
-                cornerRadius = 12f
-                setStroke(2, Color.parseColor("#37474F")) // Subtle border outline
+                setColor(Color.parseColor("#21272B"))
+                cornerRadius = 10f
+                setStroke(2, Color.parseColor("#37474F"))
             }
             background = shape
         }
+
         statusCard.addView(TextView(this).apply {
             text = "HARDWARE & NETWORK STATUS"
-            textSize = 12f
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#90CAF9")) // High-contrast cyan/blue accent
-            setPadding(0, 0, 0, 8)
+            setTextColor(Color.parseColor("#90CAF9"))
+            setPadding(0, 0, 0, 4)
         })
 
-        val kioskNetworkStatusLabel = TextView(this).apply {
-            textSize = 13f
-            setPadding(0, 3, 0, 5)
-        }
-        val printerStatusLabel = TextView(this).apply {
-            textSize = 13f
-            setPadding(0, 3, 0, 5)
-        }
-        val alarmLightStatusLabel = TextView(this).apply {
-            textSize = 13f
-            setPadding(0, 3, 0, 3)
-        }
+        val kioskNetworkStatusLabel = TextView(this).apply { textSize = 12f; setPadding(0, 1, 0, 2) }
+        val printerStatusLabel = TextView(this).apply { textSize = 12f; setPadding(0, 1, 0, 2) }
+        val edcStatusLabel = TextView(this).apply { textSize = 12f; setPadding(0, 1, 0, 2) }
+        val alarmLightStatusLabel = TextView(this).apply { textSize = 12f; setPadding(0, 1, 0, 1) }
 
         statusCard.addView(kioskNetworkStatusLabel)
         statusCard.addView(printerStatusLabel)
+        statusCard.addView(edcStatusLabel)
         statusCard.addView(alarmLightStatusLabel)
+        rootContainer.addView(statusCard)
 
-        // Real-time Status Probes
+        // --- Status Probe Logic ---
         val updateAllStatuses = {
             // 1. Kiosk Network Status
             val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -432,13 +551,13 @@ class MainActivity : AppCompatActivity() {
 
             if (isWifi) {
                 kioskNetworkStatusLabel.text = "● Network: Wi-Fi Connected ($localIp)"
-                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#66BB6A")) // Bright Mint Green
+                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
             } else if (isEthernet) {
                 kioskNetworkStatusLabel.text = "● Network: Ethernet Connected ($localIp)"
                 kioskNetworkStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
             } else {
                 kioskNetworkStatusLabel.text = "○ Network: Offline (No Wi-Fi/LAN)"
-                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#EF5350")) // Bright Coral Red
+                kioskNetworkStatusLabel.setTextColor(Color.parseColor("#EF5350"))
             }
 
             // 2. Alarm Light Status
@@ -448,10 +567,28 @@ class MainActivity : AppCompatActivity() {
                 alarmLightStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
             } else {
                 alarmLightStatusLabel.text = "○ USB Alarm Light: Not Found"
-                alarmLightStatusLabel.setTextColor(Color.parseColor("#B0BEC5")) // Readable Light Slate
+                alarmLightStatusLabel.setTextColor(Color.parseColor("#B0BEC5"))
             }
 
-            // 3. Printer Status (Dynamic by Connection type)
+            // 3. EDC Status
+            val edcStat = HexaEcrDriver.getStatus(this@MainActivity)
+            val edcStatusStr = edcStat.optString("status", "DISABLED")
+            when (edcStatusStr) {
+                "READY" -> {
+                    edcStatusLabel.text = "● EDC Terminal: Ready (${edcStat.optString("deviceName", "EDC")})"
+                    edcStatusLabel.setTextColor(Color.parseColor("#66BB6A"))
+                }
+                "DISCONNECTED" -> {
+                    edcStatusLabel.text = "○ EDC Terminal: Disconnected"
+                    edcStatusLabel.setTextColor(Color.parseColor("#EF5350"))
+                }
+                else -> {
+                    edcStatusLabel.text = "○ EDC Terminal: ${edcStat.optString("message", "Disabled")}"
+                    edcStatusLabel.setTextColor(Color.parseColor("#B0BEC5"))
+                }
+            }
+
+            // 4. Printer Status
             val selectedConn = printerConnSpinner.selectedItem.toString()
             when (selectedConn) {
                 "USB" -> {
@@ -536,11 +673,34 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Tab Switching Function
+        val selectTab = { index: Int ->
+            activeTab = index
+            tabGeneralView.visibility = if (index == 0) View.VISIBLE else View.GONE
+            tabPrinterView.visibility = if (index == 1) View.VISIBLE else View.GONE
+            tabEdcView.visibility = if (index == 2) View.VISIBLE else View.GONE
+
+            for (i in tabButtons.indices) {
+                if (i == index) {
+                    tabButtons[i].setBackgroundColor(Color.parseColor("#1565C0")) // Active Blue
+                    tabButtons[i].setTextColor(Color.WHITE)
+                } else {
+                    tabButtons[i].setBackgroundColor(Color.parseColor("#37474F")) // Inactive Slate
+                    tabButtons[i].setTextColor(Color.parseColor("#B0BEC5"))
+                }
+            }
+            updateAllStatuses()
+        }
+
+        for (i in tabButtons.indices) {
+            tabButtons[i].setOnClickListener { selectTab(i) }
+        }
+        selectTab(0) // Default to Tab 0
+
         // Debounced typing handler for Network IP
         val debounceHandler = Handler(Looper.getMainLooper())
         var pendingCheckRunnable: Runnable? = null
 
-        // Check printer status on connection type change
         printerConnSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = printerConnSpinner.selectedItem.toString()
@@ -567,70 +727,20 @@ class MainActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {
                 pendingCheckRunnable?.let { debounceHandler.removeCallbacks(it) }
                 pendingCheckRunnable = Runnable { updateAllStatuses() }
-                debounceHandler.postDelayed(pendingCheckRunnable!!, 800) // 800ms debounce
+                debounceHandler.postDelayed(pendingCheckRunnable!!, 800)
             }
         })
 
-        printerPathInput.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                pendingCheckRunnable?.let { debounceHandler.removeCallbacks(it) }
-                updateAllStatuses()
-            }
-        }
-
-        // --- PRINT SERVER ROLE (In-line checkbox & high-contrast white label) ---
-        val printServerBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 10, 0, 8)
-        }
-        val serverIpLabel = TextView(this).apply {
-            val ip = KioskHttpServer.getDeviceIpAddress(this@MainActivity)
-            text = "Endpoint: http://$ip:8080/print"
-            textSize = 12f
-            setTextColor(Color.parseColor("#90CAF9")) // High-contrast light blue
-            setPadding(36, 0, 0, 5)
-            visibility = if (prefs.getBoolean("print_server_role", false)) View.VISIBLE else View.GONE
-        }
-        val printServerCheckBox = CheckBox(this).apply {
-            text = "API Print Server Service (Port 8080)"
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            isChecked = prefs.getBoolean("print_server_role", false)
-            setTextColor(Color.WHITE) // Crisp high-contrast white text
-            setOnCheckedChangeListener { _, isChecked ->
-                serverIpLabel.visibility = if (isChecked) View.VISIBLE else View.GONE
-            }
-        }
-
-        printServerBox.addView(printServerCheckBox)
-        printServerBox.addView(serverIpLabel)
-
-        rightColumn.addView(TextView(this).apply { text = "Print Method"; typeface = Typeface.DEFAULT_BOLD })
-        rightColumn.addView(printMethodSpinner)
-        rightColumn.addView(TextView(this).apply { text = "Printer Connection"; setPadding(0, 6, 0, 0) })
-        rightColumn.addView(printerConnSpinner)
-        rightColumn.addView(TextView(this).apply { text = "Printer Tech"; setPadding(0, 6, 0, 0) })
-        rightColumn.addView(printerModeSpinner)
-        rightColumn.addView(TextView(this).apply { text = "Paper Size"; setPadding(0, 6, 0, 0) })
-        rightColumn.addView(paperSizeSpinner)
-        rightColumn.addView(printerPathLabel)
-        rightColumn.addView(printerPathInput)
-        rightColumn.addView(printServerBox)
-        rightColumn.addView(statusCard)
-
-        columnContainer.addView(leftColumn)
-        columnContainer.addView(rightColumn)
-        rootLayout.addView(columnContainer)
-
-        // --- 3. BOTTOM ACTIONS: TEST PRINT, TEST LIGHT & UPDATE ---
-        val actionsLayout = LinearLayout(this).apply {
+        // --- 5. FIXED BOTTOM ACTIONS: TEST BUTTONS ---
+        val testActionsLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 8, 0, 8)
-            weightSum = 3f
+            setPadding(0, 6, 0, 4)
+            weightSum = 4f
         }
 
         val testPrintBtn = Button(this).apply {
             text = "Test Print"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val isSilent = printMethodSpinner.selectedItemPosition == 1
@@ -648,6 +758,7 @@ class MainActivity : AppCompatActivity() {
 
         val testLightBtn = Button(this).apply {
             text = "Test Light"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 UsbAlarmLightManager.flashFastRed(this@MainActivity, buzzer = true)
@@ -660,9 +771,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val testEdcBtn = Button(this).apply {
+            text = "Test EDC"
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                Toast.makeText(this@MainActivity, "Testing EDC Terminal...", Toast.LENGTH_SHORT).show()
+                HexaEcrDriver.echoTest(this@MainActivity) { success, msg ->
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+
         val currentVer = AppUpdateManager.getCurrentVersion(this)
         val updateBtn = Button(this).apply {
             text = "Update (v$currentVer)"
+            textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 isEnabled = false
@@ -677,28 +803,33 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        actionsLayout.addView(testPrintBtn)
-        actionsLayout.addView(testLightBtn)
-        actionsLayout.addView(updateBtn)
-        rootLayout.addView(actionsLayout)
+        testActionsLayout.addView(testPrintBtn)
+        testActionsLayout.addView(testLightBtn)
+        testActionsLayout.addView(testEdcBtn)
+        testActionsLayout.addView(updateBtn)
+        rootContainer.addView(testActionsLayout)
 
-        scrollContainer.addView(rootLayout)
-        builder.setView(scrollContainer)
-
-        val dialog = builder.create()
-
-        // --- 4. BOTTOM ACTION ROW (Setup, QR, Android, Exit, Cancel, Save) ---
-        val buttonRow = LinearLayout(this).apply {
+        // --- 6. FIXED BOTTOM ROW: NAVIGATION & SAVE ACTIONS ---
+        val navRow1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(30, 0, 30, 15)
-            weightSum = 6f
+            setPadding(0, 2, 0, 2)
+            weightSum = 3f
         }
+        val navRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 2, 0, 2)
+            weightSum = 3f
+        }
+
+        builder.setView(rootContainer)
+        val dialog = builder.create()
 
         val setupBtn = Button(this).apply {
             text = "Setup"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 val tenant = tenantInput.text.toString().trim().replace(" ", "")
                 if (tenant.isNotEmpty()) {
                     val setupUrl = "https://$tenant.dalemao.com/page/business/business"
@@ -712,9 +843,10 @@ class MainActivity : AppCompatActivity() {
 
         val qrBtn = Button(this).apply {
             text = "QR Order"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 val tenant = tenantInput.text.toString().trim().replace(" ", "")
                 if (tenant.isNotEmpty()) {
                     val qrUrl = "https://$tenant.dalemao.com/page/public/generate-scan-to-order-qr"
@@ -728,9 +860,10 @@ class MainActivity : AppCompatActivity() {
 
         val androidSettingsBtn = Button(this).apply {
             text = "Android"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 try { stopLockTask() } catch (e: Exception) {}
                 startActivity(Intent(Settings.ACTION_SETTINGS))
             }
@@ -738,10 +871,11 @@ class MainActivity : AppCompatActivity() {
 
         val exitKioskBtn = Button(this).apply {
             text = "Exit Kiosk"
-            setTextColor(Color.parseColor("#D32F2F")) // Red alert color
+            textSize = 12f
+            setTextColor(Color.parseColor("#EF5350"))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 dialog.dismiss()
                 promptAdminExitKiosk()
             }
@@ -749,18 +883,20 @@ class MainActivity : AppCompatActivity() {
 
         val cancelBtn = Button(this).apply {
             text = "Cancel"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { 
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 dialog.dismiss() 
             }
         }
 
         val saveBtn = Button(this).apply {
             text = "Save & Reload"
+            textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
-                hideKeyboard(rootLayout)
+                hideKeyboard(rootContainer)
                 fun sanitize(s: String) = s.trim().replace(" ", "").replace("loopon", "")
 
                 val tenant = sanitize(tenantInput.text.toString())
@@ -776,6 +912,9 @@ class MainActivity : AppCompatActivity() {
                 val pPath = sanitize(printerPathInput.text.toString())
                 val isServerRole = printServerCheckBox.isChecked
 
+                val edcModel = edcModelSpinner.selectedItem.toString()
+                val edcTimeout = edcTimeoutInput.text.toString().toIntOrNull() ?: 60
+
                 val urls = generateUrls(tenant, station, branch, kitchen, mode)
                 
                 prefs.edit()
@@ -790,6 +929,8 @@ class MainActivity : AppCompatActivity() {
                     .putString("paper_size", pSize)
                     .putString("printer_path", pPath)
                     .putBoolean("print_server_role", isServerRole)
+                    .putString("edc_model", edcModel)
+                    .putInt("edc_timeout_sec", edcTimeout)
                     .putString("main_url", urls.first)
                     .putString("sec_url", urls.second)
                     .apply()
@@ -807,13 +948,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        buttonRow.addView(setupBtn)
-        buttonRow.addView(qrBtn)
-        buttonRow.addView(androidSettingsBtn)
-        buttonRow.addView(exitKioskBtn)
-        buttonRow.addView(cancelBtn)
-        buttonRow.addView(saveBtn)
-        rootLayout.addView(buttonRow)
+        navRow1.addView(setupBtn)
+        navRow1.addView(qrBtn)
+        navRow1.addView(androidSettingsBtn)
+
+        navRow2.addView(exitKioskBtn)
+        navRow2.addView(cancelBtn)
+        navRow2.addView(saveBtn)
+
+        rootContainer.addView(navRow1)
+        rootContainer.addView(navRow2)
 
         dialog.show()
         
@@ -1283,6 +1427,12 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 printWebView = null
             }
+        }
+    }
+
+    fun runJavaScript(script: String) {
+        runOnUiThread {
+            mainWebView.evaluateJavascript(script, null)
         }
     }
 

@@ -9,6 +9,7 @@ import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbDevice
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import org.json.JSONObject
 
 class WebAppInterface(private val context: Context) {
 
@@ -95,6 +96,31 @@ class WebAppInterface(private val context: Context) {
             "buzzer_on" -> UsbAlarmLightManager.buzzerOn(context)
             "buzzer_off" -> UsbAlarmLightManager.buzzerOff(context)
             else -> UsbAlarmLightManager.turnOff(context)
+        }
+    }
+
+    /**
+     * Web page calls this to check if a hardware EDC terminal is attached and ready.
+     * Returns JSON: { "enabled": true/false, "status": "READY"|"DISCONNECTED"|"DISABLED", "model": "..." }
+     */
+    @JavascriptInterface
+    fun getEdcStatus(): String {
+        return HexaEcrDriver.getStatus(context).toString()
+    }
+
+    /**
+     * Web page calls this to initiate a payment on the physical EDC terminal.
+     * @param jsonPayload { "amount": 50000, "transType": "SALE"|"QRIS", "invoiceNo": "INV-123" }
+     */
+    @JavascriptInterface
+    fun initEdcPayment(jsonPayload: String) {
+        val mainActivity = context as? MainActivity
+        HexaEcrDriver.processPayment(context, jsonPayload) { resultJson ->
+            Handler(Looper.getMainLooper()).post {
+                // Deliver result back to the webview JavaScript callback: window.onEdcPaymentResult(resultJson)
+                val safeJs = "if (window.onEdcPaymentResult) { window.onEdcPaymentResult(${JSONObject.quote(resultJson)}); }"
+                mainActivity?.runJavaScript(safeJs)
+            }
         }
     }
 

@@ -25,9 +25,19 @@ object HexaEcrDriver {
 
     private const val TAG = "HexaEcrDriver"
 
-    // Common Ingenico / Sagem / Prolific / FTDI / CP210x / CDC-ACM vendor IDs for EDC terminals
-    // Ingenico Telium: 0x079B, Prolific: 0x067B, FTDI: 0x0403, CP210x: 0x10C4, CDC: Class 2
-    private val KNOWN_EDC_VIDS = intArrayOf(0x079B, 0x067B, 0x0403, 0x10C4, 0x28E9, 0x0B00)
+    // Supported EDC Vendor IDs:
+    // 0x079B: Ingenico Telium (ICT220, IWL220, EFT930)
+    // 0x2F78: Ingenico Axium (DX8000, EX8000)
+    // 0x05C6: Qualcomm Smart EDC USB (Ingenico Axium DX8000, Castles S1E / SATURN1000)
+    // 0x18D1: Android Accessory / ADB USB gadget
+    // 0x067B: Prolific PL2303 USB-to-Serial
+    // 0x0403: FTDI FT232 USB-to-Serial
+    // 0x10C4: Silicon Labs CP210x USB-to-Serial
+    // 0x28E9: WCH CH34x CDC serial
+    // 0x0B00: Ingenico OEM
+    private val KNOWN_EDC_VIDS = intArrayOf(
+        0x079B, 0x2F78, 0x05C6, 0x18D1, 0x067B, 0x0403, 0x10C4, 0x28E9, 0x0B00
+    )
 
     const val MODEL_NONE = "None"
     const val MODEL_HEXA_ECR = "Hexa ECR (Bank Mandiri / Ingenico)"
@@ -39,11 +49,27 @@ object HexaEcrDriver {
     fun findEdcDevice(context: Context): UsbDevice? {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val list = usbManager.deviceList.values
+
+        // Exclude devices we already manage for other roles:
+        // - Printer: Class 7
+        // - USB Alarm Light: VID 0x1A86 (CH340)
         return list.firstOrNull { dev ->
-            // Match known USB-serial / Telium VIDs or USB CDC communication device
-            KNOWN_EDC_VIDS.contains(dev.vendorId) ||
-                    dev.deviceClass == UsbConstants.USB_CLASS_COMM ||
-                    (0 until dev.interfaceCount).any { dev.getInterface(it).interfaceClass == UsbConstants.USB_CLASS_COMM }
+            val isPrinter = dev.deviceClass == 7 || (0 until dev.interfaceCount).any { dev.getInterface(it).interfaceClass == 7 }
+            val isAlarmLight = dev.vendorId == 0x1A86
+
+            if (isPrinter || isAlarmLight) {
+                false
+            } else {
+                // Check if known EDC VID OR Communication Class OR has vendor-specific bulk endpoints
+                KNOWN_EDC_VIDS.contains(dev.vendorId) ||
+                        dev.deviceClass == UsbConstants.USB_CLASS_COMM ||
+                        (0 until dev.interfaceCount).any { i ->
+                            val uif = dev.getInterface(i)
+                            uif.interfaceClass == UsbConstants.USB_CLASS_COMM ||
+                                    uif.interfaceClass == UsbConstants.USB_CLASS_CDC_DATA ||
+                                    uif.interfaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC
+                        }
+            }
         }
     }
 

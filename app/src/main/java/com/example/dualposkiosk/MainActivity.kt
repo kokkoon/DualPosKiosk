@@ -489,11 +489,41 @@ class MainActivity : AppCompatActivity() {
             setText(prefs.getInt("edc_timeout_sec", 60).toString())
         }
 
+        // Diagnostic list of all physically connected USB devices
+        val usbDiagText = TextView(this).apply {
+            textSize = 11f
+            setTextColor(Color.parseColor("#90CAF9"))
+            setPadding(10, 8, 10, 8)
+            val shape = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A000000"))
+                cornerRadius = 8f
+                setStroke(1, Color.parseColor("#37474F"))
+            }
+            background = shape
+        }
+
+        val refreshUsbDiag: () -> Unit = {
+            val usbManager = getSystemService(USB_SERVICE) as UsbManager
+            val devices = usbManager.deviceList.values
+            if (devices.isEmpty()) {
+                usbDiagText.text = "Detected USB Hardware: None"
+            } else {
+                val sb = StringBuilder("Detected USB Hardware (${devices.size}):\n")
+                devices.forEach { d ->
+                    val vidHex = "%04X".format(d.vendorId)
+                    val pidHex = "%04X".format(d.productId)
+                    val name = d.productName ?: "Unknown Device"
+                    sb.append("• VID: 0x$vidHex, PID: 0x$pidHex - $name (Class ${d.deviceClass})\n")
+                }
+                usbDiagText.text = sb.toString().trimEnd()
+            }
+        }
+
         val edcHelpText = TextView(this).apply {
-            text = "💡 Web application can check EDC availability via window.posLauncher.getEdcStatus() and initiate payments with window.posLauncher.initEdcPayment()."
+            text = "💡 Note for Ingenico DX8000:\n1. On the DX8000, ensure ECR mode is enabled in the Bank app (Interface: USB/Serial).\n2. Pull down top notification on DX8000 and confirm USB mode is not 'Charging only'.\n3. Web can check status with posLauncher.getEdcStatus() and pay with posLauncher.initEdcPayment()."
             textSize = 12f
             setTextColor(Color.parseColor("#B0BEC5"))
-            setPadding(0, 12, 0, 10)
+            setPadding(0, 10, 0, 10)
         }
 
         tabEdcView.addView(TextView(this).apply { text = "EDC Hardware Model"; typeface = Typeface.DEFAULT_BOLD })
@@ -502,6 +532,7 @@ class MainActivity : AppCompatActivity() {
         tabEdcView.addView(edcPortSpinner)
         tabEdcView.addView(edcTimeoutLabel)
         tabEdcView.addView(edcTimeoutInput)
+        tabEdcView.addView(usbDiagText)
         tabEdcView.addView(edcHelpText)
 
         // Add tabs to scroll layout
@@ -590,6 +621,9 @@ class MainActivity : AppCompatActivity() {
                     edcStatusLabel.setTextColor(Color.parseColor("#B0BEC5"))
                 }
             }
+
+            // Refresh USB hardware diagnostic view
+            refreshUsbDiag()
 
             // 4. Printer Status
             val selectedConn = printerConnSpinner.selectedItem.toString()

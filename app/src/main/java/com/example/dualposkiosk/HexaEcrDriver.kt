@@ -50,9 +50,11 @@ object HexaEcrDriver {
     fun getStatus(context: Context): JSONObject {
         val prefs = context.getSharedPreferences("KioskSettings", Context.MODE_PRIVATE)
         val selectedModel = prefs.getString("edc_model", MODEL_NONE) ?: MODEL_NONE
+        val selectedPort = prefs.getString("edc_port", "USB (Baud 9600)") ?: "USB (Baud 9600)"
 
         val json = JSONObject()
         json.put("model", selectedModel)
+        json.put("port", selectedPort)
 
         when (selectedModel) {
             MODEL_NONE -> {
@@ -75,12 +77,12 @@ object HexaEcrDriver {
                     json.put("deviceName", dev.productName ?: "EDC Terminal")
                     json.put("hasPermission", hasPerm)
                     json.put("status", if (hasPerm) "READY" else "PERMISSION_REQUIRED")
-                    json.put("message", if (hasPerm) "EDC Terminal Ready" else "USB permission required")
+                    json.put("message", if (hasPerm) "EDC Terminal Ready ($selectedPort)" else "USB permission required")
                 } else {
                     json.put("enabled", true)
                     json.put("attached", false)
                     json.put("status", "DISCONNECTED")
-                    json.put("message", "No EDC Terminal attached")
+                    json.put("message", "No EDC Terminal attached ($selectedPort)")
                 }
             }
         }

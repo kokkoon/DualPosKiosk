@@ -474,6 +474,9 @@ class MainActivity : AppCompatActivity() {
         val edcPortSpinner = Spinner(this).apply {
             val ports = arrayOf("USB (Baud 9600)", "RS232 Serial (Baud 115200)")
             adapter = ArrayAdapter(this@MainActivity, R.layout.simple_spinner_dropdown_item, ports)
+            val savedPort = prefs.getString("edc_port", "USB (Baud 9600)")
+            val idx = ports.indexOf(savedPort)
+            setSelection(if (idx >= 0) idx else 0)
         }
 
         val edcTimeoutLabel = TextView(this).apply {
@@ -913,6 +916,7 @@ class MainActivity : AppCompatActivity() {
                 val isServerRole = printServerCheckBox.isChecked
 
                 val edcModel = edcModelSpinner.selectedItem.toString()
+                val edcPort = edcPortSpinner.selectedItem.toString()
                 val edcTimeout = edcTimeoutInput.text.toString().toIntOrNull() ?: 60
 
                 val urls = generateUrls(tenant, station, branch, kitchen, mode)
@@ -930,6 +934,7 @@ class MainActivity : AppCompatActivity() {
                     .putString("printer_path", pPath)
                     .putBoolean("print_server_role", isServerRole)
                     .putString("edc_model", edcModel)
+                    .putString("edc_port", edcPort)
                     .putInt("edc_timeout_sec", edcTimeout)
                     .putString("main_url", urls.first)
                     .putString("sec_url", urls.second)

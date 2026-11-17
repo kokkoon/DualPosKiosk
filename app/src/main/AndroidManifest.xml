@@ -30,12 +30,14 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Dual POS Kiosk"
         android:supportsRtl="true"
+        android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:hardwareAccelerated="true"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustResize">

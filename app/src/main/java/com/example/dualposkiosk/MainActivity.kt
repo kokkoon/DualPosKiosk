@@ -107,17 +107,19 @@ class MainActivity : AppCompatActivity() {
         WebView.setWebContentsDebuggingEnabled(true)
 
         mainWebView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.databaseEnabled = true
-            
-            // --- OFFLINE & PERFORMANCE ENHANCEMENTS ---
-            settings.cacheMode = WebSettings.LOAD_DEFAULT 
-            settings.allowFileAccess = true
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = true
-            
-            settings.userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            // Enable hardware acceleration layer for smooth scrolling & rendering
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = true
+                cacheMode = WebSettings.LOAD_DEFAULT
+                allowFileAccess = true
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            }
             
             webViewClient = object : WebViewClient() {
                 // Intercept static assets (images, webp, fonts) to serve directly from local flash storage

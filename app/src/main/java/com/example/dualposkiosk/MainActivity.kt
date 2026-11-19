@@ -1018,7 +1018,6 @@ class MainActivity : AppCompatActivity() {
         navRow2.addView(clearCacheBtn)
         navRow2.addView(cancelBtn)
         navRow2.addView(saveBtn)
-        navRow2.addView(saveBtn)
 
         rootContainer.addView(navRow1)
         rootContainer.addView(navRow2)

@@ -63,6 +63,21 @@ object WebAssetCache {
         }
     }
 
+    fun clear(context: Context) {
+        thread {
+            try {
+                val dir = File(context.cacheDir, CACHE_DIR_NAME)
+                if (dir.exists()) {
+                    dir.deleteRecursively()
+                    dir.mkdirs()
+                }
+                Log.i(TAG, "Asset cache cleared")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to clear asset cache: ${e.message}")
+            }
+        }
+    }
+
     fun interceptRequest(request: WebResourceRequest?): WebResourceResponse? {
         if (request == null || request.method.uppercase() != "GET") return null
 
@@ -77,7 +92,7 @@ object WebAssetCache {
         val ext = urlStr.substringBefore('?').substringAfterLast('.', "")
         val cachedFile = File(targetDir, "$cacheKey.$ext")
 
-        // 1. HIT: Serve directly from fast flash storage
+        // 1. HIT: Serve directly from fast flash storage (< 5ms)
         if (cachedFile.exists() && cachedFile.length() > 0) {
             return try {
                 val stream = FileInputStream(cachedFile)
@@ -92,45 +107,27 @@ object WebAssetCache {
             }
         }
 
-        // 2. MISS: Download, write to cache, and serve
-        try {
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 7000
-                readTimeout = 10000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "DualPosKiosk-AssetCache")
-                // Forward request headers
-                request.requestHeaders?.forEach { (k, v) ->
-                    if (!k.equals("Host", ignoreCase = true)) {
-                        setRequestProperty(k, v)
-                    }
+        // 2. MISS: Download in a background thread to cache for NEXT time,
+        // but return NULL immediately so Chromium native network stack fetches in parallel via HTTP/2
+        // without blocking the WebView loader thread!
+        thread {
+            try {
+                val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 10000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "DualPosKiosk-AssetCache")
                 }
-            }
-
-            if (conn.responseCode == 200) {
-                val bytes = conn.inputStream.use { it.readBytes() }
-                if (bytes.isNotEmpty()) {
-                    // Save asynchronously or directly to disk
-                    thread {
-                        try {
-                            FileOutputStream(cachedFile).use { it.write(bytes) }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed saving asset to disk: ${e.message}")
+                if (conn.responseCode == 200) {
+                    conn.inputStream.use { input ->
+                        FileOutputStream(cachedFile).use { output ->
+                            input.copyTo(output)
                         }
                     }
-
-                    val headers = mapOf(
-                        "Access-Control-Allow-Origin" to "*",
-                        "Cache-Control" to "max-age=2592000, public"
-                    )
-                    return WebResourceResponse(mimeType, "UTF-8", 200, "OK", headers, ByteArrayInputStream(bytes))
                 }
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "Cache miss download failed for $urlStr: ${e.message}")
+            } catch (_: Exception) {}
         }
 
-        // Fallback to default WebView pipeline if fetch fails
         return null
     }
 

@@ -82,13 +82,13 @@ object HexaEcrDriver {
         json.put("model", selectedModel)
         json.put("port", selectedPort)
 
-        when (selectedModel) {
-            MODEL_NONE -> {
+        when {
+            selectedModel == MODEL_NONE || selectedModel.startsWith("None", ignoreCase = true) -> {
                 json.put("enabled", false)
                 json.put("status", "DISABLED")
                 json.put("message", "EDC Integration disabled")
             }
-            MODEL_MOCK -> {
+            selectedModel == MODEL_MOCK || selectedModel.contains("Mock", ignoreCase = true) -> {
                 json.put("enabled", true)
                 json.put("status", "READY")
                 json.put("message", "Mock Simulator Active")
@@ -128,12 +128,12 @@ object HexaEcrDriver {
         val prefs = context.getSharedPreferences("KioskSettings", Context.MODE_PRIVATE)
         val selectedModel = prefs.getString("edc_model", MODEL_NONE) ?: MODEL_NONE
 
-        if (selectedModel == MODEL_NONE) {
+        if (selectedModel == MODEL_NONE || selectedModel.startsWith("None", ignoreCase = true)) {
             onResult(makeErrorJson("EDC_DISABLED", "EDC integration is disabled in Kiosk Settings"))
             return
         }
 
-        if (selectedModel == MODEL_MOCK) {
+        if (selectedModel == MODEL_MOCK || selectedModel.contains("Mock", ignoreCase = true)) {
             processMockPayment(jsonPayload, onResult)
             return
         }

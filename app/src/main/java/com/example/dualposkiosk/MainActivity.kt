@@ -63,6 +63,7 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.webkit.WebResourceResponse
+import android.webkit.WebStorage
 import android.widget.CheckBox
 import kotlin.concurrent.thread
 import androidx.appcompat.app.AlertDialog
@@ -110,6 +111,11 @@ class MainActivity : AppCompatActivity() {
             // Enable hardware acceleration layer for smooth scrolling & rendering
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
+            // Disable overscroll glow & scrollbars to eliminate layer thrashing on RK3568/RK3588
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -133,6 +139,9 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    // Always restore LOAD_DEFAULT once page finishes loading so transient network drops don't stick permanently
+                    view?.settings?.cacheMode = WebSettings.LOAD_DEFAULT
+
                     // Bind posLauncher to the bridge on every window/page load
                     view?.loadUrl("javascript:(function() { " +
                             "window.posLauncher = { " +
@@ -857,7 +866,7 @@ class MainActivity : AppCompatActivity() {
         val navRow2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 2, 0, 2)
-            weightSum = 3f
+            weightSum = 4f
         }
 
         builder.setView(rootContainer)
@@ -917,6 +926,18 @@ class MainActivity : AppCompatActivity() {
                 hideKeyboard(rootContainer)
                 dialog.dismiss()
                 promptAdminExitKiosk()
+            }
+        }
+
+        val clearCacheBtn = Button(this).apply {
+            text = "Clear Cache"
+            textSize = 11f
+            setTextColor(Color.parseColor("#FFB74D")) // High-visibility Amber
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                hideKeyboard(rootContainer)
+                dialog.dismiss()
+                clearAllCachesAndReload()
             }
         }
 
@@ -994,7 +1015,9 @@ class MainActivity : AppCompatActivity() {
         navRow1.addView(androidSettingsBtn)
 
         navRow2.addView(exitKioskBtn)
+        navRow2.addView(clearCacheBtn)
         navRow2.addView(cancelBtn)
+        navRow2.addView(saveBtn)
         navRow2.addView(saveBtn)
 
         rootContainer.addView(navRow1)
@@ -1731,6 +1754,32 @@ class MainActivity : AppCompatActivity() {
             val secondaryUrl = prefs.getString("sec_url", "")
             if (!secondaryUrl.isNullOrBlank()) {
                 secondaryPresentation?.updateUrl(secondaryUrl)
+            }
+        }
+    }
+
+    fun clearAllCachesAndReload() {
+        runOnUiThread {
+            try {
+                // 1. Clear WebView RAM & Disk HTTP Cache & WebStorage
+                mainWebView.clearCache(true)
+                mainWebView.clearHistory()
+                WebStorage.getInstance().deleteAllData()
+
+                // 2. Clear custom WebAssetCache flash directory
+                WebAssetCache.clear(this)
+
+                // 3. Force fresh fetch on reload without cache
+                mainWebView.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                mainWebView.reload()
+
+                val secondaryUrl = prefs.getString("sec_url", "")
+                if (!secondaryUrl.isNullOrBlank()) {
+                    secondaryPresentation?.updateUrl(secondaryUrl)
+                }
+                Toast.makeText(this, "Kiosk Cache Cleared & Reloading...", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Cache clear error: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }

@@ -19,6 +19,10 @@ class SecondaryDisplay(context: Context, display: Display, private val url: Stri
 
         webView = WebView(context).apply {
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true

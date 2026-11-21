@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.dualposkiosk"
         minSdk = 28
         targetSdk = 37
-        versionCode = 30
-        versionName = "1.3.12"
+        versionCode = 31
+        versionName = "1.3.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

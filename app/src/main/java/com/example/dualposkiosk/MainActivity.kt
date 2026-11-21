@@ -94,9 +94,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         prefs = getSharedPreferences("KioskSettings", MODE_PRIVATE)
-        val defaultUrl = "https://neohotels.dalemao.com/page/public/kds/all"
-        val mainUrl = prefs.getString("main_url", defaultUrl) ?: defaultUrl
-        val secondaryUrl: String = prefs.getString("sec_url", "https://neohotels.dalemao.com/page/public/kds/all") ?: "https://neohotels.dalemao.com/page/public/kds/all"
+        
+        // Derive initial startup URLs from the default station mode & parameters
+        val initialUrls = generateUrls("reward", "demo", "demo", "all", "Kiosk")
+        val mainUrl = prefs.getString("main_url", initialUrls.first) ?: initialUrls.first
+        val secondaryUrl = prefs.getString("sec_url", initialUrls.second) ?: initialUrls.second
 
         // Initialize High-Speed Disk Asset Cache
         WebAssetCache.init(this)
@@ -238,26 +240,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun generateUrls(tenant: String, station: String, branch: String, kitchen: String, mode: String): Pair<String, String> {
+        val safeTenant = if (tenant.isBlank()) "reward" else tenant
+        val safeStation = if (station.isBlank()) "demo" else station
+        val safeBranch = if (branch.isBlank()) "demo" else branch
+        val safeKitchen = if (kitchen.isBlank()) "all" else kitchen
+
         return when (mode) {
             "Kiosk" -> {
                 Pair(
-                    "https://${tenant}.dalemao.com/page/public/menu-kiosk/${station}/${branch}",
-                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}"
+                    "https://${safeTenant}.dalemao.com/page/public/menu-kiosk/${safeStation}/${safeBranch}",
+                    "https://${safeTenant}.dalemao.com/page/public/kds/${safeKitchen}/${safeBranch}"
                 )
             }
             "POS" -> {
                 Pair(
-                    "https://${tenant}.dalemao.com/page/public/pos/${station}/${branch}",
-                    "https://${tenant}.dalemao.com/page/public/pos-cust"
+                    "https://${safeTenant}.dalemao.com/page/public/pos/${safeStation}/${safeBranch}",
+                    "https://${safeTenant}.dalemao.com/page/public/pos-cust"
                 )
             }
             "KDS" -> {
                 Pair(
-                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}",
-                    "https://${tenant}.dalemao.com/page/public/kds/${kitchen}/${branch}"
+                    "https://${safeTenant}.dalemao.com/page/public/kds/${safeKitchen}/${safeBranch}",
+                    "https://${safeTenant}.dalemao.com/page/public/kds/${safeKitchen}/${safeBranch}"
                 )
             }
-            else -> Pair("https://${tenant}.dalemao.com", "https://${tenant}.dalemao.com")
+            else -> Pair("https://${safeTenant}.dalemao.com", "https://${safeTenant}.dalemao.com")
         }
     }
 
@@ -359,9 +366,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val tenantInput = EditText(this).apply { hint = "Tenant"; setText(prefs.getString("tenant", "neohotels")) }
-        val stationInput = EditText(this).apply { hint = "Station"; setText(prefs.getString("station", "all")) }
-        val branchInput = EditText(this).apply { hint = "Branch"; setText(prefs.getString("branch", "")) }
+        val tenantInput = EditText(this).apply { hint = "Tenant"; setText(prefs.getString("tenant", "reward")) }
+        val stationInput = EditText(this).apply { hint = "Station"; setText(prefs.getString("station", "demo")) }
+        val branchInput = EditText(this).apply { hint = "Branch"; setText(prefs.getString("branch", "demo")) }
 
         tabGeneralView.addView(TextView(this).apply { text = "Station Mode"; typeface = Typeface.DEFAULT_BOLD })
         tabGeneralView.addView(modeSpinner)
